@@ -73,16 +73,14 @@
   tg.ready();
   tg.expand();
 
-  // El bot arma la URL con ?d=<base64url de un JSON>, así la lista de ítems
-  // siempre sale de Airtable en el momento y esta página nunca queda desfasada.
-  // Forma: {"t":"Conteo de Barra","s":"Diego · cierre · semana 2026-07-27","i":[{"k":"BAR-01","n":"LIMONADA"}]}
-  function leerDatos() {
-    var q = new URLSearchParams(location.search).get('d');
-    if (!q) return null;
-    var b64 = q.replace(/-/g, '+').replace(/_/g, '/');
-    while (b64.length % 4) b64 += '=';
-    return JSON.parse(decodeURIComponent(escape(atob(b64))));
-  }
+    // El bot arma la URL con ?d=<JSON percent-encoded>, así la lista de ítems
+    // siempre sale de Airtable en el momento y esta página nunca queda desfasada.
+    // Forma: {"t":"Conteo de Barra","s":"Diego · cierre · semana 2026-07-27","i":[{"k":"BAR-01","n":"LIMONADA"}]}
+    function leerDatos() {
+          var q = new URLSearchParams(location.search).get('d');
+          if (!q) return null;
+          return JSON.parse(q);
+    }
 
   var datos;
   try {

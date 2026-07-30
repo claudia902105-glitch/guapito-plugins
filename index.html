@@ -1,1 +1,429 @@
-https://github.com/claudia902105-glitch/guapito-plugins/edit/main/index.html
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Conteo — El Guapo</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #fff);
+    --fg: var(--tg-theme-text-color, #000);
+    --hint: var(--tg-theme-hint-color, #707579);
+    --sec: var(--tg-theme-secondary-bg-color, #f1f1f1);
+    --link: var(--tg-theme-link-color, #2481cc);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 12px 12px 96px;
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header { padding: 4px 0 12px; }
+  h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
+  .meta { color: var(--hint); font-size: 13px; }
+  h2 {
+    margin: 20px 0 8px; font-size: 13px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .04em; color: var(--hint);
+  }
+  .row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px; margin-bottom: 8px;
+    background: var(--sec); border-radius: 10px;
+  }
+  .row.pendiente { outline: 2px solid #e0a800; }
+  .row.malo { outline: 2px solid #d64545; }
+  .info { flex: 1; min-width: 0; }
+  .nombre {
+    font-size: 15px; font-weight: 500;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sku { color: var(--hint); font-size: 12px; }
+  .ayuda { color: var(--hint); font-size: 12px; margin-top: 2px; }
+  input[type=number] {
+    width: 84px; padding: 10px; text-align: center;
+    font-size: 17px; font-weight: 600;
+    border: 1px solid rgba(128,128,128,.35); border-radius: 8px;
+    background: var(--bg); color: var(--fg);
+    -moz-appearance: textfield;
+  }
+  input::-webkit-outer-spin-button, input::-webkit-inner-spin-button {
+    -webkit-appearance: none; margin: 0;
+  }
+  input:focus { outline: 2px solid var(--link); border-color: transparent; }
+  .par { display: flex; gap: 6px; }
+  .par label { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .par span { font-size: 10px; color: var(--hint); text-transform: uppercase; }
+  .par input { width: 72px; }
+  .calc {
+    padding: 10px 12px; margin-bottom: 8px;
+    border-radius: 10px; background: var(--sec);
+    font-size: 13px; color: var(--hint);
+  }
+  .calc b { color: var(--fg); font-weight: 600; }
+  #aviso {
+    position: fixed; left: 12px; right: 12px; bottom: 12px;
+    padding: 12px; border-radius: 10px;
+    background: #e0a800; color: #000; font-size: 14px; text-align: center;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1 id="titulo">Conteo</h1>
+  <div class="meta" id="subtitulo"></div>
+</header>
+
+<div id="cuerpo"></div>
+<div id="aviso"></div>
+
+<script>
+(function () {
+  var tg = window.Telegram && window.Telegram.WebApp;
+  if (!tg) {
+    document.body.innerHTML = '<p style="padding:20px">Esta página solo funciona abierta desde Telegram.</p>';
+    return;
+  }
+  tg.ready();
+  tg.expand();
+
+  // El bot arma la URL con ?d=<JSON>, así los catálogos salen de Airtable en el
+  // momento y esta página nunca queda desfasada.
+  //
+  //   tipo "conteo"  (por defecto) → {"t","s","i":[{"k","n"}]}
+  //     /barra, /produccion Existencia, /produccion Menú 3, /rellenos Existencia
+  //   tipo "proteina" (Menú 2)     → {"t","s","r":[{"k","n"}]}  r = recetas destino
+  //
+  // URLSearchParams ya hace el percent-decode. Si eso no da JSON válido se
+  // reintenta como base64url, para no romper si algún día el bot cambia de
+  // codificación.
+  function leerDatos() {
+    var q = new URLSearchParams(location.search).get('d');
+    if (!q) return null;
+    try {
+      return JSON.parse(q);
+    } catch (e) {
+      var b64 = q.replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      return JSON.parse(decodeURIComponent(escape(atob(b64))));
+    }
+  }
+
+  var datos;
+  try {
+    datos = leerDatos();
+  } catch (e) {
+    datos = null;
+  }
+  if (!datos) {
+    document.body.innerHTML = '<p style="padding:20px">No se recibieron los datos. Volvé a Telegram y escribí el comando de nuevo.</p>';
+    return;
+  }
+
+  document.getElementById('titulo').textContent = datos.t || 'Conteo';
+  document.getElementById('subtitulo').textContent = datos.s || '';
+
+  var cuerpo = document.getElementById('cuerpo');
+  var aviso = document.getElementById('aviso');
+  var tipo = datos.tipo || 'conteo';
+
+  function num(input) {
+    var v = input.value.trim();
+    return v === '' ? null : Number(v);
+  }
+
+  function enviar(payload) {
+    var texto = JSON.stringify(payload);
+    // sendData tiene tope de 4096 bytes. Mejor un error claro que un envío
+    // truncado en silencio.
+    if (new Blob([texto]).size > 4000) {
+      tg.showAlert('El formulario es demasiado largo para enviarse de una. Avisale a Claudia.');
+      return;
+    }
+    tg.sendData(texto);
+  }
+
+  function titulo(texto) {
+    var h = document.createElement('h2');
+    h.textContent = texto;
+    cuerpo.appendChild(h);
+  }
+
+  // Fila con un solo campo numérico. Devuelve el input.
+  function filaSimple(nombre, sub, ayuda) {
+    var row = document.createElement('div');
+    row.className = 'row';
+    var info = document.createElement('div');
+    info.className = 'info';
+    var n = document.createElement('div');
+    n.className = 'nombre';
+    n.textContent = nombre;
+    info.appendChild(n);
+    if (sub) {
+      var s = document.createElement('div');
+      s.className = 'sku';
+      s.textContent = sub;
+      info.appendChild(s);
+    }
+    if (ayuda) {
+      var a = document.createElement('div');
+      a.className = 'ayuda';
+      a.textContent = ayuda;
+      info.appendChild(a);
+    }
+    var input = document.createElement('input');
+    input.type = 'number';
+    input.inputMode = 'decimal';
+    input.min = '0';
+    input.step = 'any';
+    input.placeholder = '—';
+    row.appendChild(info);
+    row.appendChild(input);
+    cuerpo.appendChild(row);
+    input._row = row;
+    return input;
+  }
+
+  /* ---------------------------------------------------------------- conteo */
+  // Lista de ítems con una cantidad cada uno. Es el flujo de /barra y el que
+  // reusan Existencia y el menú de panadería.
+  function modoConteo() {
+    if (!Array.isArray(datos.i) || !datos.i.length) {
+      document.body.innerHTML = '<p style="padding:20px">No se recibió la lista de ítems. Volvé a Telegram y escribí el comando de nuevo.</p>';
+      return;
+    }
+
+    var inputs = datos.i.map(function (item) {
+      var input = filaSimple(item.n, item.k);
+      input.dataset.k = item.k;
+      return input;
+    });
+
+    inputs.forEach(function (input, idx) {
+      // Enter salta al siguiente campo en vez de cerrar el teclado.
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (inputs[idx + 1]) inputs[idx + 1].focus();
+          else input.blur();
+        }
+      });
+      input.addEventListener('input', revisar);
+    });
+
+    // Nada se envía a medias: el botón solo se habilita con los N ítems llenos.
+    // Un conteo incompleto que llegue a Airtable se lee como "había 0", y eso
+    // dispara una alerta falsa de faltante.
+    function revisar() {
+      var faltan = inputs.filter(function (i) { return i.value.trim() === ''; });
+      inputs.forEach(function (i) {
+        i._row.classList.toggle('pendiente', i.value.trim() === '');
+      });
+      if (faltan.length) {
+        tg.MainButton.hide();
+        aviso.style.display = 'block';
+        aviso.textContent = 'Faltan ' + faltan.length + ' de ' + inputs.length + ' ítems';
+      } else {
+        aviso.style.display = 'none';
+        tg.MainButton.setText('Enviar (' + inputs.length + ' ítems)');
+        tg.MainButton.show();
+      }
+    }
+
+    tg.MainButton.onClick(function () {
+      enviar({
+        f: datos.f || 'conteo',
+        tipo: 'conteo',
+        t: datos.t || '',
+        s: datos.s || '',
+        v: inputs.map(function (i) {
+          return { k: i.dataset.k, q: Number(i.value) };
+        })
+      });
+    });
+
+    revisar();
+  }
+
+  /* -------------------------------------------------------------- proteína */
+  // Menú 2: la cadena de pesos crudo → limpio → cocido → porcionado, y el
+  // reparto entre las recetas que salen de la pieza.
+  function modoProteina() {
+    titulo('Pesos');
+    var crudo  = filaSimple('Peso inicial crudo', 'gramos', 'Como llega la pieza');
+    var limpio = filaSimple('Peso limpio', 'gramos', 'Después de quitar grasa y recortes');
+    var cocido = filaSimple('Peso cocido', 'gramos', 'Opcional, si la pieza se cocina');
+    var final  = filaSimple('Peso final porcionado', 'gramos', 'Lo que queda repartido en porciones');
+    var aprov  = filaSimple('Merma aprovechable', 'gramos', 'Opcional: recortes que van a consumo interno');
+
+    titulo('Porciones');
+    var porc = filaSimple('Porciones resultantes', 'unidades');
+
+    var resumen = document.createElement('div');
+    resumen.className = 'calc';
+    cuerpo.appendChild(resumen);
+
+    titulo('Distribución entre recetas');
+    var recetas = Array.isArray(datos.r) ? datos.r : [];
+    var filas = recetas.map(function (r) {
+      var row = document.createElement('div');
+      row.className = 'row';
+      var info = document.createElement('div');
+      info.className = 'info';
+      var n = document.createElement('div');
+      n.className = 'nombre';
+      n.textContent = r.n;
+      var s = document.createElement('div');
+      s.className = 'sku';
+      s.textContent = r.k;
+      info.appendChild(n);
+      info.appendChild(s);
+
+      var par = document.createElement('div');
+      par.className = 'par';
+      function campo(etiqueta) {
+        var l = document.createElement('label');
+        var sp = document.createElement('span');
+        sp.textContent = etiqueta;
+        var inp = document.createElement('input');
+        inp.type = 'number';
+        inp.inputMode = 'decimal';
+        inp.min = '0';
+        inp.step = 'any';
+        inp.placeholder = '—';
+        l.appendChild(sp);
+        l.appendChild(inp);
+        par.appendChild(l);
+        return inp;
+      }
+      var g = campo('gramos');
+      var p = campo('porciones');
+
+      row.appendChild(info);
+      row.appendChild(par);
+      cuerpo.appendChild(row);
+      return { k: r.k, row: row, g: g, p: p };
+    });
+
+    var todos = [crudo, limpio, cocido, final, aprov, porc].concat(
+      filas.map(function (f) { return f.g; }),
+      filas.map(function (f) { return f.p; })
+    );
+    todos.forEach(function (i) { i.addEventListener('input', revisar); });
+
+    function revisar() {
+      var vCrudo = num(crudo), vLimpio = num(limpio);
+      var vCocido = num(cocido), vFinal = num(final);
+      var vPorc = num(porc), vAprov = num(aprov);
+      var problemas = [];
+
+      [crudo, final, porc].forEach(function (i) {
+        i._row.classList.toggle('pendiente', num(i) === null);
+      });
+      if (num(crudo) === null) problemas.push('Falta el peso inicial crudo');
+      if (num(final) === null) problemas.push('Falta el peso final porcionado');
+      if (vPorc === null) problemas.push('Faltan las porciones resultantes');
+
+      // La cadena de pesos solo puede ir hacia abajo. Un peso que sube es un
+      // error de digitación, y si entra así arruina las tres mermas.
+      var cadena = [
+        { i: crudo,  v: vCrudo,  n: 'crudo' },
+        { i: limpio, v: vLimpio, n: 'limpio' },
+        { i: cocido, v: vCocido, n: 'cocido' },
+        { i: final,  v: vFinal,  n: 'final' }
+      ].filter(function (x) { return x.v !== null; });
+
+      cadena.forEach(function (x) { x.i._row.classList.remove('malo'); });
+      for (var j = 1; j < cadena.length; j++) {
+        if (cadena[j].v > cadena[j - 1].v) {
+          cadena[j].i._row.classList.add('malo');
+          problemas.push('El peso ' + cadena[j].n + ' no puede ser mayor que el ' + cadena[j - 1].n);
+        }
+      }
+
+      // El reparto tiene que cuadrar con lo que realmente quedó.
+      var sumaG = 0, sumaP = 0, conDato = 0;
+      filas.forEach(function (f) {
+        var g = num(f.g), p = num(f.p);
+        if (g !== null) { sumaG += g; conDato++; }
+        if (p !== null) sumaP += p;
+        f.row.classList.toggle('pendiente', (g === null) !== (p === null));
+      });
+      filas.forEach(function (f) {
+        if ((num(f.g) === null) !== (num(f.p) === null)) {
+          problemas.push('Completá gramos y porciones en ' + f.k);
+        }
+      });
+      if (!conDato) problemas.push('Falta repartir la pieza entre al menos una receta');
+
+      var lineas = [];
+      if (vCrudo !== null && vLimpio !== null) {
+        lineas.push('Merma de limpieza: <b>' + (vCrudo - vLimpio) + ' g</b>');
+      }
+      if (vLimpio !== null && vCocido !== null) {
+        lineas.push('Merma de cocción: <b>' + (vLimpio - vCocido) + ' g</b>');
+      }
+      var base = vCocido !== null ? vCocido : vLimpio;
+      if (base !== null && vFinal !== null) {
+        lineas.push('Merma de porcionamiento: <b>' + (base - vFinal) + ' g</b>');
+      }
+      if (vCrudo && vFinal !== null) {
+        lineas.push('Rendimiento: <b>' + Math.round(vFinal / vCrudo * 1000) / 10 + '%</b>');
+      }
+      if (vFinal !== null && vPorc) {
+        lineas.push('Gramos por porción: <b>' + Math.round(vFinal / vPorc) + ' g</b>');
+      }
+      if (vFinal !== null) {
+        var falta = vFinal - sumaG;
+        lineas.push('Repartido: <b>' + sumaG + ' de ' + vFinal + ' g</b>' +
+          (Math.abs(falta) < 1 ? ' ✓' : (falta > 0 ? ' — faltan ' + falta + ' g' : ' — sobran ' + (-falta) + ' g')));
+        if (sumaG > vFinal) problemas.push('Estás repartiendo más de lo que quedó porcionado');
+      }
+      if (vAprov !== null && base !== null && vFinal !== null && vAprov > base - vFinal) {
+        aprov._row.classList.add('malo');
+        problemas.push('La merma aprovechable no puede superar la de porcionamiento');
+      } else {
+        aprov._row.classList.remove('malo');
+      }
+      if (sumaP && vPorc && sumaP !== vPorc) {
+        lineas.push('Porciones repartidas: <b>' + sumaP + ' de ' + vPorc + '</b>');
+      }
+      resumen.innerHTML = lineas.join(' · ') || 'Cargá los pesos para ver las mermas.';
+
+      if (problemas.length) {
+        tg.MainButton.hide();
+        aviso.style.display = 'block';
+        aviso.textContent = problemas[0];
+      } else {
+        aviso.style.display = 'none';
+        tg.MainButton.setText('Enviar producción');
+        tg.MainButton.show();
+      }
+    }
+
+    tg.MainButton.onClick(function () {
+      enviar({
+        f: datos.f || 'prod-prot',
+        tipo: 'proteina',
+        t: datos.t || '',
+        s: datos.s || '',
+        w: {
+          crudo: num(crudo), limpio: num(limpio), cocido: num(cocido),
+          final: num(final), aprov: num(aprov), porc: num(porc)
+        },
+        d: filas.filter(function (f) { return num(f.g) !== null; })
+                .map(function (f) { return { k: f.k, g: num(f.g), p: num(f.p) }; })
+      });
+    });
+
+    revisar();
+  }
+
+  if (tipo === 'proteina') modoProteina();
+  else modoConteo();
+})();
+</script>
+</body>
+</html>

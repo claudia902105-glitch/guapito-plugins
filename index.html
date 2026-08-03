@@ -61,6 +61,9 @@
     font-size: 13px; color: var(--hint);
   }
   .calc b { color: var(--fg); font-weight: 600; }
+  /* Rendimiento en vivo dentro de la fila: se ve mientras se escribe, para
+     cazar el dedazo antes de mandar. No se envía — lo recalcula Airtable. */
+  .rend { font-size: 12px; margin-top: 2px; color: var(--link); }
   #aviso {
     position: fixed; left: 12px; right: 12px; bottom: 12px;
     padding: 12px; border-radius: 10px;
@@ -93,7 +96,9 @@
   // momento y esta página nunca queda desfasada.
   //
   //   tipo "conteo"  (por defecto) → {"t","s","i":[{"k","n"}]}
-  //     /barra, /produccion Existencia, /produccion Menú 3, /rellenos Existencia
+  //     /barra, /produccion Existencia, /rellenos Existencia
+  //     + opcional {"rec":1,"u":"g"} → segunda columna de recetas y rendimiento
+  //       en vivo; lo usan producción de panadería (Menú 3) y de rellenos (Menú 4)
   //   tipo "proteina" (Menú 2)     → {"t","s","r":[{"k","n"}]}  r = recetas destino
   //
   // URLSearchParams ya hace el percent-decode. Si eso no da JSON válido se
@@ -188,25 +193,38 @@
 
   /* ---------------------------------------------------------------- conteo */
   // Lista de ítems con una cantidad cada uno. Es el flujo de /barra y el que
-  // reusan Existencia y el menú de panadería.
+  // reusan Existencia, panadería y rellenos.
+  //
+  // Con `rec: 1` en el JSON aparece una segunda columna, "recetas", y debajo del
+  // nombre el rendimiento en vivo (cantidad ÷ recetas). Es opcional a propósito:
+  // /barra y Existencia cuentan lo que hay, no lo que se hizo, y no mandan `rec`
+  // — para ellos esta función se comporta exactamente igual que antes.
+  //
+  // `u` es la unidad de la cantidad ("g" o "und") y solo se usa para rotular.
   function modoConteo() {
     if (!Array.isArray(datos.i) || !datos.i.length) {
       document.body.innerHTML = '<p style="padding:20px">No se recibió la lista de ítems. Volvé a Telegram y escribí el comando de nuevo.</p>';
       return;
     }
 
-    var inputs = datos.i.map(function (item) {
-      var input = filaSimple(item.n, item.k);
-      input.dataset.k = item.k;
-      return input;
+    var conRecetas = !!datos.rec;
+    var unidad = datos.u || '';
+
+    var filas = datos.i.map(function (item) {
+      return conRecetas ? filaConRecetas(item, unidad) : filaSola(item);
     });
 
-    inputs.forEach(function (input, idx) {
-      // Enter salta al siguiente campo en vez de cerrar el teclado.
+    // Todos los campos en orden de tabulación, para que Enter avance.
+    var orden = [];
+    filas.forEach(function (f) {
+      orden.push(f.cant);
+      if (f.rec) orden.push(f.rec);
+    });
+    orden.forEach(function (input, idx) {
       input.addEventListener('keydown', function (e) {
         if (e.key === 'Enter') {
           e.preventDefault();
-          if (inputs[idx + 1]) inputs[idx + 1].focus();
+          if (orden[idx + 1]) orden[idx + 1].focus();
           else input.blur();
         }
       });
@@ -216,18 +234,44 @@
     // Nada se envía a medias: el botón solo se habilita con los N ítems llenos.
     // Un conteo incompleto que llegue a Airtable se lee como "había 0", y eso
     // dispara una alerta falsa de faltante.
+    //
+    // Las recetas son la excepción: solo se exigen en los ítems que de verdad se
+    // produjeron. Pedir "cuántas recetas" de algo que salió en 0 es ruido, y
+    // obligaría a llenar 8 campos para reportar un solo sabor.
     function revisar() {
-      var faltan = inputs.filter(function (i) { return i.value.trim() === ''; });
-      inputs.forEach(function (i) {
-        i._row.classList.toggle('pendiente', i.value.trim() === '');
+      var faltan = 0;
+
+      filas.forEach(function (f) {
+        var vacia = f.cant.value.trim() === '';
+        var q = vacia ? null : Number(f.cant.value);
+        var produjo = q > 0;
+
+        if (vacia) faltan++;
+        f.cant._row.classList.toggle('pendiente', vacia);
+
+        if (!f.rec) return;
+
+        // Un ítem en cero no se produjo: la casilla de recetas se apaga y se
+        // limpia, así no queda un número viejo colgado de un dedazo corregido.
+        f.rec.disabled = !produjo;
+        f.rec.style.opacity = produjo ? '' : '.35';
+        if (!produjo && f.rec.value !== '') f.rec.value = '';
+
+        var r = f.rec.value.trim() === '' ? null : Number(f.rec.value);
+        if (produjo && !(r > 0)) faltan++;
+
+        f.rend.textContent = (produjo && r > 0)
+          ? '→ ' + redondear(q / r) + (unidad ? ' ' + unidad : '') + ' por receta'
+          : '';
       });
-      if (faltan.length) {
+
+      if (faltan) {
         tg.MainButton.hide();
         aviso.style.display = 'block';
-        aviso.textContent = 'Faltan ' + faltan.length + ' de ' + inputs.length + ' ítems';
+        aviso.textContent = 'Faltan ' + faltan + ' dato' + (faltan === 1 ? '' : 's');
       } else {
         aviso.style.display = 'none';
-        tg.MainButton.setText('Enviar (' + inputs.length + ' ítems)');
+        tg.MainButton.setText('Enviar (' + filas.length + ' ítems)');
         tg.MainButton.show();
       }
     }
@@ -238,13 +282,78 @@
         tipo: 'conteo',
         t: datos.t || '',
         s: datos.s || '',
-        v: inputs.map(function (i) {
-          return { k: i.dataset.k, q: Number(i.value) };
+        v: filas.map(function (f) {
+          var fila = { k: f.k, q: Number(f.cant.value) };
+          // `r` solo viaja cuando hubo producción: el bot distingue "no aplica"
+          // de "cero recetas" por la ausencia de la clave, no por un 0.
+          if (f.rec && fila.q > 0) fila.r = Number(f.rec.value);
+          return fila;
         })
       });
     });
 
     revisar();
+  }
+
+  // Un decimal, y sin el ".0" cuando es redondo.
+  function redondear(n) {
+    return String(Math.round(n * 10) / 10);
+  }
+
+  // Fila de una sola cantidad — el conteo de toda la vida.
+  function filaSola(item) {
+    var input = filaSimple(item.n, item.k);
+    return { k: item.k, cant: input, rec: null, rend: null };
+  }
+
+  // Fila con cantidad + recetas + el rendimiento debajo del nombre.
+  function filaConRecetas(item, unidad) {
+    var row = document.createElement('div');
+    row.className = 'row';
+
+    var info = document.createElement('div');
+    info.className = 'info';
+    var n = document.createElement('div');
+    n.className = 'nombre';
+    n.textContent = item.n;
+    var s = document.createElement('div');
+    s.className = 'sku';
+    s.textContent = item.k;
+    var rend = document.createElement('div');
+    rend.className = 'rend';
+    info.appendChild(n);
+    info.appendChild(s);
+    info.appendChild(rend);
+
+    var par = document.createElement('div');
+    par.className = 'par';
+    var cant = campoRotulado(par, unidad || 'cantidad');
+    var rec = campoRotulado(par, 'recetas');
+    rec.step = '1';
+    rec.min = '1';
+
+    row.appendChild(info);
+    row.appendChild(par);
+    cuerpo.appendChild(row);
+
+    cant._row = row;
+    return { k: item.k, cant: cant, rec: rec, rend: rend };
+  }
+
+  function campoRotulado(par, rotulo) {
+    var label = document.createElement('label');
+    var span = document.createElement('span');
+    span.textContent = rotulo;
+    var input = document.createElement('input');
+    input.type = 'number';
+    input.inputMode = 'decimal';
+    input.min = '0';
+    input.step = 'any';
+    input.placeholder = '—';
+    label.appendChild(span);
+    label.appendChild(input);
+    par.appendChild(label);
+    return input;
   }
 
   /* -------------------------------------------------------------- proteína */

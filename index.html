@@ -99,7 +99,8 @@
   //     /barra, /produccion Existencia, /rellenos Existencia
   //     + opcional {"rec":1,"u":"g"} → segunda columna de recetas y rendimiento
   //       en vivo; lo usan producción de panadería (Menú 3) y de rellenos (Menú 4)
-  //   tipo "proteina" (Menú 2)     → {"t","s","r":[{"k","n"}]}  r = recetas destino
+  //   tipo "proteina" (Menú 2)     → {"t","s","p":"A"|"B"|"C","r":[{"k","n"}]}
+  //     p = perfil de la proteína (ver PERFILES); r = recetas destino, solo B y C
   //
   // URLSearchParams ya hace el percent-decode. Si eso no da JSON válido se
   // reintenta como base64url, para no romper si algún día el bot cambia de
@@ -357,66 +358,77 @@
   }
 
   /* -------------------------------------------------------------- proteína */
-  // Menú 2: la cadena de pesos crudo → limpio → cocido → porcionado, y el
-  // reparto entre las recetas que salen de la pieza.
+  // Menú 2. No todas las proteínas se trabajan igual (Alicia, 2-ago-2026), así
+  // que hay tres perfiles y cada uno pide solo lo que de verdad se mide. Pedir
+  // un peso que nadie toma es peor que no pedirlo: se llena con un número
+  // inventado y ensucia las mermas.
+  //
+  //   A · entera            crudo → limpio → porciones.       Sin reparto.
+  //   B · porcionada cruda  crudo → limpio → reparto.          Sin cocción.
+  //   C · porcionada cocida crudo → limpio → cocido → aprovechable → reparto.
+  //
+  // El perfil llega en `p`. Si no viene, se asume C, que es el más completo —
+  // así un formulario viejo sigue comportándose como antes.
+  var PERFILES = {
+    A: { cocido: false, aprov: false, porcSuelta: true,  reparto: false },
+    B: { cocido: false, aprov: false, porcSuelta: false, reparto: true  },
+    C: { cocido: true,  aprov: true,  porcSuelta: false, reparto: true  }
+  };
+
   function modoProteina() {
+    var perfil = PERFILES[datos.p] || PERFILES.C;
+
     titulo('Pesos');
     var crudo  = filaSimple('Peso inicial crudo', 'gramos', 'Como llega la pieza');
     var limpio = filaSimple('Peso limpio', 'gramos', 'Después de quitar grasa y recortes');
-    var cocido = filaSimple('Peso cocido', 'gramos', 'Opcional, si la pieza se cocina');
-    var final  = filaSimple('Peso final porcionado', 'gramos', 'Lo que queda repartido en porciones');
-    var aprov  = filaSimple('Merma aprovechable', 'gramos', 'Opcional: recortes que van a consumo interno');
+    var cocido = perfil.cocido
+      ? filaSimple('Peso cocido', 'gramos', 'Después de la cocción')
+      : null;
+    var aprov = perfil.aprov
+      ? filaSimple('Merma aprovechable', 'gramos', 'Opcional: recortes que van a consumo interno')
+      : null;
 
-    titulo('Porciones');
-    var porc = filaSimple('Porciones resultantes', 'unidades');
+    var porc = null;
+    if (perfil.porcSuelta) {
+      titulo('Porciones');
+      porc = filaSimple('Porciones resultantes', 'unidades');
+    }
 
     var resumen = document.createElement('div');
     resumen.className = 'calc';
     cuerpo.appendChild(resumen);
 
-    titulo('Distribución entre recetas');
-    var recetas = Array.isArray(datos.r) ? datos.r : [];
-    var filas = recetas.map(function (r) {
-      var row = document.createElement('div');
-      row.className = 'row';
-      var info = document.createElement('div');
-      info.className = 'info';
-      var n = document.createElement('div');
-      n.className = 'nombre';
-      n.textContent = r.n;
-      var s = document.createElement('div');
-      s.className = 'sku';
-      s.textContent = r.k;
-      info.appendChild(n);
-      info.appendChild(s);
+    var filas = [];
+    if (perfil.reparto) {
+      titulo('Distribución entre recetas');
+      var recetas = Array.isArray(datos.r) ? datos.r : [];
+      filas = recetas.map(function (r) {
+        var row = document.createElement('div');
+        row.className = 'row';
+        var info = document.createElement('div');
+        info.className = 'info';
+        var n = document.createElement('div');
+        n.className = 'nombre';
+        n.textContent = r.n;
+        var s = document.createElement('div');
+        s.className = 'sku';
+        s.textContent = r.k;
+        info.appendChild(n);
+        info.appendChild(s);
 
-      var par = document.createElement('div');
-      par.className = 'par';
-      function campo(etiqueta) {
-        var l = document.createElement('label');
-        var sp = document.createElement('span');
-        sp.textContent = etiqueta;
-        var inp = document.createElement('input');
-        inp.type = 'number';
-        inp.inputMode = 'decimal';
-        inp.min = '0';
-        inp.step = 'any';
-        inp.placeholder = '—';
-        l.appendChild(sp);
-        l.appendChild(inp);
-        par.appendChild(l);
-        return inp;
-      }
-      var g = campo('gramos');
-      var p = campo('porciones');
+        var par = document.createElement('div');
+        par.className = 'par';
+        var g = campoRotulado(par, 'gramos');
+        var p = campoRotulado(par, 'porciones');
 
-      row.appendChild(info);
-      row.appendChild(par);
-      cuerpo.appendChild(row);
-      return { k: r.k, row: row, g: g, p: p };
-    });
+        row.appendChild(info);
+        row.appendChild(par);
+        cuerpo.appendChild(row);
+        return { k: r.k, row: row, g: g, p: p };
+      });
+    }
 
-    var todos = [crudo, limpio, cocido, final, aprov, porc].concat(
+    var todos = [crudo, limpio, cocido, aprov, porc].filter(Boolean).concat(
       filas.map(function (f) { return f.g; }),
       filas.map(function (f) { return f.p; })
     );
@@ -424,25 +436,29 @@
 
     function revisar() {
       var vCrudo = num(crudo), vLimpio = num(limpio);
-      var vCocido = num(cocido), vFinal = num(final);
-      var vPorc = num(porc), vAprov = num(aprov);
+      var vCocido = cocido ? num(cocido) : null;
+      var vAprov = aprov ? num(aprov) : null;
+      var vPorc = porc ? num(porc) : null;
       var problemas = [];
 
-      [crudo, final, porc].forEach(function (i) {
-        i._row.classList.toggle('pendiente', num(i) === null);
+      // Obligatorios: los que este perfil sí mide.
+      var obligatorios = [{ i: crudo, n: 'Falta el peso inicial crudo' },
+                          { i: limpio, n: 'Falta el peso limpio' }];
+      if (cocido) obligatorios.push({ i: cocido, n: 'Falta el peso cocido' });
+      if (porc)   obligatorios.push({ i: porc, n: 'Faltan las porciones resultantes' });
+      obligatorios.forEach(function (o) {
+        var vacio = num(o.i) === null;
+        o.i._row.classList.toggle('pendiente', vacio);
+        if (vacio) problemas.push(o.n);
       });
-      if (num(crudo) === null) problemas.push('Falta el peso inicial crudo');
-      if (num(final) === null) problemas.push('Falta el peso final porcionado');
-      if (vPorc === null) problemas.push('Faltan las porciones resultantes');
 
       // La cadena de pesos solo puede ir hacia abajo. Un peso que sube es un
-      // error de digitación, y si entra así arruina las tres mermas.
+      // error de digitación, y si entra así arruina las mermas.
       var cadena = [
         { i: crudo,  v: vCrudo,  n: 'crudo' },
         { i: limpio, v: vLimpio, n: 'limpio' },
-        { i: cocido, v: vCocido, n: 'cocido' },
-        { i: final,  v: vFinal,  n: 'final' }
-      ].filter(function (x) { return x.v !== null; });
+        { i: cocido, v: vCocido, n: 'cocido' }
+      ].filter(function (x) { return x.i && x.v !== null; });
 
       cadena.forEach(function (x) { x.i._row.classList.remove('malo'); });
       for (var j = 1; j < cadena.length; j++) {
@@ -452,20 +468,22 @@
         }
       }
 
-      // El reparto tiene que cuadrar con lo que realmente quedó.
+      // Lo que queda disponible para repartir: lo cocido si se cocinó, si no lo limpio.
+      var base = vCocido !== null ? vCocido : vLimpio;
+
       var sumaG = 0, sumaP = 0, conDato = 0;
       filas.forEach(function (f) {
         var g = num(f.g), p = num(f.p);
         if (g !== null) { sumaG += g; conDato++; }
         if (p !== null) sumaP += p;
         f.row.classList.toggle('pendiente', (g === null) !== (p === null));
-      });
-      filas.forEach(function (f) {
-        if ((num(f.g) === null) !== (num(f.p) === null)) {
+        if ((g === null) !== (p === null)) {
           problemas.push('Completá gramos y porciones en ' + f.k);
         }
       });
-      if (!conDato) problemas.push('Falta repartir la pieza entre al menos una receta');
+      if (perfil.reparto && !conDato) {
+        problemas.push('Falta repartir la pieza entre al menos una receta');
+      }
 
       var lineas = [];
       if (vCrudo !== null && vLimpio !== null) {
@@ -474,30 +492,28 @@
       if (vLimpio !== null && vCocido !== null) {
         lineas.push('Merma de cocción: <b>' + (vLimpio - vCocido) + ' g</b>');
       }
-      var base = vCocido !== null ? vCocido : vLimpio;
-      if (base !== null && vFinal !== null) {
-        lineas.push('Merma de porcionamiento: <b>' + (base - vFinal) + ' g</b>');
-      }
-      if (vCrudo && vFinal !== null) {
-        lineas.push('Rendimiento: <b>' + Math.round(vFinal / vCrudo * 1000) / 10 + '%</b>');
-      }
-      if (vFinal !== null && vPorc) {
-        lineas.push('Gramos por porción: <b>' + Math.round(vFinal / vPorc) + ' g</b>');
-      }
-      if (vFinal !== null) {
-        var falta = vFinal - sumaG;
-        lineas.push('Repartido: <b>' + sumaG + ' de ' + vFinal + ' g</b>' +
+      if (perfil.reparto && base !== null) {
+        var falta = base - sumaG;
+        lineas.push('Repartido: <b>' + sumaG + ' de ' + base + ' g</b>' +
           (Math.abs(falta) < 1 ? ' ✓' : (falta > 0 ? ' — faltan ' + falta + ' g' : ' — sobran ' + (-falta) + ' g')));
-        if (sumaG > vFinal) problemas.push('Estás repartiendo más de lo que quedó porcionado');
+        if (sumaG > base) problemas.push('Estás repartiendo más de lo que quedó');
       }
-      if (vAprov !== null && base !== null && vFinal !== null && vAprov > base - vFinal) {
-        aprov._row.classList.add('malo');
-        problemas.push('La merma aprovechable no puede superar la de porcionamiento');
-      } else {
-        aprov._row.classList.remove('malo');
+      if (vCrudo) {
+        var salida = perfil.reparto ? sumaG : vLimpio;
+        if (salida) lineas.push('Rendimiento: <b>' + Math.round(salida / vCrudo * 1000) / 10 + '%</b>');
       }
-      if (sumaP && vPorc && sumaP !== vPorc) {
-        lineas.push('Porciones repartidas: <b>' + sumaP + ' de ' + vPorc + '</b>');
+      var totalPorc = perfil.porcSuelta ? vPorc : sumaP;
+      if (totalPorc) {
+        var pesoUtil = perfil.reparto ? sumaG : vLimpio;
+        if (pesoUtil) lineas.push('Gramos por porción: <b>' + Math.round(pesoUtil / totalPorc) + ' g</b>');
+        if (!perfil.porcSuelta) lineas.push('Porciones: <b>' + totalPorc + '</b>');
+      }
+      // La merma aprovechable sale de lo que NO se repartió: no puede ser mayor.
+      if (aprov) {
+        var sobrante = base !== null ? base - sumaG : null;
+        var excede = vAprov !== null && sobrante !== null && vAprov > sobrante;
+        aprov._row.classList.toggle('malo', !!excede);
+        if (excede) problemas.push('La merma aprovechable no puede superar lo que quedó sin repartir');
       }
       resumen.innerHTML = lineas.join(' · ') || 'Cargá los pesos para ver las mermas.';
 
@@ -513,18 +529,26 @@
     }
 
     tg.MainButton.onClick(function () {
-      enviar({
+      var pesos = { crudo: num(crudo), limpio: num(limpio) };
+      if (cocido) pesos.cocido = num(cocido);
+      if (aprov)  pesos.aprov  = num(aprov);
+      if (porc)   pesos.porc   = num(porc);
+
+      var salida = {
         f: datos.f || 'prod-prot',
         tipo: 'proteina',
+        p: datos.p || 'C',
         t: datos.t || '',
         s: datos.s || '',
-        w: {
-          crudo: num(crudo), limpio: num(limpio), cocido: num(cocido),
-          final: num(final), aprov: num(aprov), porc: num(porc)
-        },
-        d: filas.filter(function (f) { return num(f.g) !== null; })
-                .map(function (f) { return { k: f.k, g: num(f.g), p: num(f.p) }; })
-      });
+        w: pesos
+      };
+      // `d` solo viaja en los perfiles que reparten. Su ausencia significa
+      // "esta pieza no se distribuye", no "se distribuyó en cero".
+      if (perfil.reparto) {
+        salida.d = filas.filter(function (f) { return num(f.g) !== null; })
+                        .map(function (f) { return { k: f.k, g: num(f.g), p: num(f.p) }; });
+      }
+      enviar(salida);
     });
 
     revisar();

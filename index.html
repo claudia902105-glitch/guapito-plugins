@@ -48,7 +48,7 @@
   }
   .banda-unidad em { font-style: normal; text-transform: uppercase; letter-spacing: .04em; }
   .ayuda { color: var(--hint); font-size: 12px; margin-top: 2px; }
-  input[type=number] {
+  input[type=number], input[type=text] {
     width: 84px; padding: 10px; text-align: center;
     font-size: 17px; font-weight: 600;
     border: 1px solid rgba(128,128,128,.35); border-radius: 8px;
@@ -72,6 +72,12 @@
   /* Rendimiento en vivo dentro de la fila: se ve mientras se escribe, para
      cazar el dedazo antes de mandar. No se envía — lo recalcula Airtable. */
   .rend { font-size: 12px; margin-top: 2px; color: var(--link); }
+  /* Límite de producción esperado para el ítem. Informa, no bloquea: el bot
+     solo captura (D3) y una producción fuera de rango es justo la que hay que
+     poder registrar. */
+  .lim { font-size: 12px; margin-top: 2px; color: var(--hint); }
+  .lim.bien { color: #2e9e4f; }
+  .lim.mal  { color: #d33; font-weight: 600; }
   #aviso {
     position: fixed; left: 12px; right: 12px; bottom: 12px;
     padding: 12px; border-radius: 10px;
@@ -109,6 +115,12 @@
   //       en vivo; lo usan producción de panadería (Menú 3) y de rellenos (Menú 4)
   //   tipo "proteina" (Menú 2)     → {"t","s","p":"A"|"B"|"C","r":[{"k","n"}]}
   //     p = perfil de la proteína (ver PERFILES); r = recetas destino, solo B y C
+  //   tipo "receta"   (Menú 1)     → {"t","s","u":"g","lim":{"est","min","max"}}
+  //     una sola preparación, ya elegida en el chat: recetas + cantidad
+  //
+  // `lim` (opcional, en el ítem o en la raíz) es el límite de producción
+  // ESPERADO POR UNA RECETA, sacado de la tabla `Rendimientos y tolerancias`.
+  // No todos los ítems tienen fila cargada; sin `lim` no se dibuja nada.
   //
   // URLSearchParams ya hace el percent-decode. Si eso no da JSON válido se
   // reintenta como base64url, para no romper si algún día el bot cambia de
@@ -169,9 +181,95 @@
   var aviso = document.getElementById('aviso');
   var tipo = datos.tipo || 'conteo';
 
+  // Dos parseos distintos, y la diferencia importa:
+  //   - Las CANTIDADES llevan separador de miles, así que "10.000" son diez mil
+  //     y hay que sacarle los puntos antes de convertir.
+  //   - El Nº DE RECETAS no lo lleva: ahí el punto (o la coma) es el separador
+  //     decimal de 0,5. Sacarle los puntos convertiría media receta en cinco.
+  // El input se marca con `_miles` cuando pasó por conSeparadorDeMiles().
   function num(input) {
     var v = input.value.trim();
-    return v === '' ? null : Number(v);
+    if (v === '') return null;
+    if (input._miles) return Number(v.replace(/\./g, '').replace(/\s/g, ''));
+    return Number(v.replace(',', '.'));
+  }
+
+  // Un número con punto de miles: 10000 -> "10.000". Para mostrar, no para leer.
+  function miles(n) {
+    if (n === null || n === undefined || isNaN(n)) return '';
+    var s = String(Math.round(Math.abs(n))).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    return (n < 0 ? '-' : '') + s;
+  }
+
+  // Separador de miles mientras se escribe (26-ago-2026, pedido de Claudia).
+  // El problema real: el personal escribe 1000 y no distingue a simple vista
+  // 1000 de 10000, así que un cero de más entra sin que nadie lo note. Con el
+  // punto puesto en vivo, "10.000" salta a la vista.
+  //
+  // Pasa el campo a type=text (un input numérico no puede mostrar puntos) e
+  // impone enteros: gramos, unidades y porciones no llevan decimales.
+  // NUNCA aplicar esto al nº de recetas.
+  function conSeparadorDeMiles(input) {
+    input.type = 'text';
+    input.inputMode = 'numeric';
+    input.autocomplete = 'off';
+    input._miles = true;
+
+    function pintar() {
+      var sel = input.selectionStart;
+      var antes = input.value;
+      // Cuántos dígitos había antes del cursor: es lo que hay que respetar al
+      // reponerlo, porque los puntos se mueven solos.
+      var digitosAntes = antes.slice(0, sel === null ? antes.length : sel)
+                              .replace(/[^0-9]/g, '').length;
+      var crudo = antes.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '');
+      var nuevo = crudo.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+      if (nuevo === antes) return;
+      input.value = nuevo;
+      var pos = 0, vistos = 0;
+      while (pos < nuevo.length && vistos < digitosAntes) {
+        if (nuevo.charAt(pos) >= '0' && nuevo.charAt(pos) <= '9') vistos++;
+        pos++;
+      }
+      try { input.setSelectionRange(pos, pos); } catch (e) {}
+    }
+
+    input.addEventListener('input', pintar);
+    input.addEventListener('blur', pintar);
+    return input;
+  }
+
+  // --------------------------------------------------------- límites (`lim`)
+  // `lim` viene por ítem y SIEMPRE está expresado por UNA receta:
+  // {est, min, max}. La página lo escala por el nº de recetas cargado —
+  // comparar un total de 5 recetas contra un límite de una es exactamente el
+  // error que estos límites existen para evitar.
+  //
+  // Sale de la tabla `Rendimientos y tolerancias` de Airtable. No todos los
+  // ítems tienen fila, así que `lim` es opcional: sin él no se dibuja nada.
+  function textoLimite(lim, unidad) {
+    if (!lim || !(lim.est > 0)) return '';
+    var u = unidad ? ' ' + unidad : '';
+    var rango = (lim.min > 0 && lim.max > 0)
+      ? ' · rango ' + miles(lim.min) + '–' + miles(lim.max) + u
+      : '';
+    return 'Esperado ' + miles(lim.est) + u + ' por receta' + rango;
+  }
+
+  // Devuelve null cuando todavía no hay con qué comparar. Nunca bloquea el
+  // envío: avisa. Una tanda fuera de rango es un dato, no un error de carga.
+  function veredictoLimite(lim, q, r, unidad) {
+    if (!lim || !(lim.min > 0) || !(lim.max > 0) || !(q > 0) || !(r > 0)) return null;
+    var porReceta = q / r;
+    var u = unidad ? ' ' + unidad : '';
+    var cuanto = miles(porReceta) + u + ' por receta';
+    if (porReceta < lim.min) {
+      return { ok: false, txt: '\u26a0\ufe0f ' + cuanto + ' — por DEBAJO del mínimo (' + miles(lim.min) + u + ')' };
+    }
+    if (porReceta > lim.max) {
+      return { ok: false, txt: '\u26a0\ufe0f ' + cuanto + ' — por ENCIMA del máximo (' + miles(lim.max) + u + ')' };
+    }
+    return { ok: true, txt: '\u2705 ' + cuanto + ' — dentro del rango' };
   }
 
   function enviar(payload) {
@@ -192,7 +290,11 @@
   }
 
   // Fila con un solo campo numérico. Devuelve el input.
-  function filaSimple(nombre, sub, ayuda, marcador) {
+  //
+  // `sinMiles` lo saca del formateo de miles y lo deja como número decimal:
+  // es para el nº de recetas, el único campo del formulario que admite 0,5 y
+  // donde el punto sería el separador decimal, no el de miles.
+  function filaSimple(nombre, sub, ayuda, marcador, sinMiles) {
     var row = document.createElement('div');
     row.className = 'row';
     var info = document.createElement('div');
@@ -214,11 +316,17 @@
       info.appendChild(a);
     }
     var input = document.createElement('input');
-    input.type = 'number';
-    input.inputMode = 'decimal';
-    input.min = '0';
-    input.step = 'any';
     input.placeholder = marcador || '—';
+    if (sinMiles) {
+      input.type = 'number';
+      input.inputMode = 'decimal';
+      input.min = '0.01';
+      input.step = '0.01';
+    } else {
+      // Por defecto filaSimple dibuja una CANTIDAD (pesos, porciones):
+      // separador de miles y enteros.
+      conSeparadorDeMiles(input);
+    }
     row.appendChild(info);
     row.appendChild(input);
     cuerpo.appendChild(row);
@@ -282,7 +390,9 @@
 
       filas.forEach(function (f) {
         var vacia = f.cant.value.trim() === '';
-        var q = vacia ? null : Number(f.cant.value);
+        // num(), NO Number(): la casilla trae separador de miles y
+        // Number("10.000") daría 10. Ese fue el punto de todo el cambio.
+        var q = vacia ? null : num(f.cant);
         var produjo = q > 0;
 
         if (vacia) faltan++;
@@ -296,12 +406,21 @@
         f.rec.style.opacity = produjo ? '' : '.35';
         if (!produjo && f.rec.value !== '') f.rec.value = '';
 
-        var r = f.rec.value.trim() === '' ? null : Number(f.rec.value);
+        var r = num(f.rec);
         if (produjo && !(r > 0)) faltan++;
 
         f.rend.textContent = (produjo && r > 0)
           ? '→ ' + redondear(q / r) + (unidad ? ' ' + unidad : '') + ' por receta'
           : '';
+
+        // El límite se evalúa contra el rendimiento POR RECETA, no contra el
+        // total. Avisa en color, nunca bloquea el envío: una tanda fuera de
+        // rango es justo la que hay que poder registrar.
+        if (f.lim) {
+          var v = veredictoLimite(f.tope, q, r, unidad);
+          f.lim.className = 'lim' + (v ? (v.ok ? ' bien' : ' mal') : '');
+          f.lim.textContent = v ? v.txt : textoLimite(f.tope, unidad);
+        }
       });
 
       if (faltan) {
@@ -322,10 +441,10 @@
         t: datos.t || '',
         s: datos.s || '',
         v: filas.map(function (f) {
-          var fila = { k: f.k, q: Number(f.cant.value) };
+          var fila = { k: f.k, q: num(f.cant) };
           // `r` solo viaja cuando hubo producción: el bot distingue "no aplica"
           // de "cero recetas" por la ausencia de la clave, no por un 0.
-          if (f.rec && fila.q > 0) fila.r = Number(f.rec.value);
+          if (f.rec && fila.q > 0) fila.r = num(f.rec);
           return fila;
         })
       });
@@ -372,21 +491,26 @@
     var par = document.createElement('div');
     par.className = 'par';
     var cant = campoRotulado(par, unidad || 'cantidad');
+    // Fracciones de receta (26-ago-2026, pedido de Alicia): campoRotulado deja
+    // este campo en step 0,01 y sin separador de miles. Antes era step=1/min=1
+    // y el navegador rechazaba 0,5 antes de que el dato saliera del teléfono.
     var rec = campoRotulado(par, 'recetas');
-    // Fracciones de receta (26-ago-2026, pedido de Alicia): se hacen medias
-    // recetas y recetas y media. Antes esto era step=1 / min=1, y el navegador
-    // rechazaba 0,5 antes de que el dato saliera del telefono; la gente escribia
-    // "1" y el rendimiento salia al doble o a la mitad. Dos decimales alcanzan
-    // para medias y cuartos.
-    rec.step = '0.01';
-    rec.min = '0.01';
+
+    // Límite de producción del ítem, si Airtable tiene tolerancia cargada.
+    var lim = null;
+    if (item.lim && item.lim.est > 0) {
+      lim = document.createElement('div');
+      lim.className = 'lim';
+      lim.textContent = textoLimite(item.lim, unidad);
+      info.appendChild(lim);
+    }
 
     row.appendChild(info);
     row.appendChild(par);
     cuerpo.appendChild(row);
 
     cant._row = row;
-    return { k: item.k, cant: cant, rec: rec, rend: rend };
+    return { k: item.k, cant: cant, rec: rec, rend: rend, lim: lim, tope: item.lim || null };
   }
 
   function campoRotulado(par, rotulo) {
@@ -394,11 +518,17 @@
     var span = document.createElement('span');
     span.textContent = rotulo;
     var input = document.createElement('input');
-    input.type = 'number';
-    input.inputMode = 'decimal';
-    input.min = '0';
-    input.step = 'any';
     input.placeholder = '—';
+    // 'recetas' es el ÚNICO campo que no lleva separador de miles: admite
+    // fracciones (0,5) y ahí el punto es el separador decimal, no de miles.
+    if (rotulo === 'recetas') {
+      input.type = 'number';
+      input.inputMode = 'decimal';
+      input.min = '0.01';
+      input.step = '0.01';
+    } else {
+      conSeparadorDeMiles(input);
+    }
     label.appendChild(span);
     label.appendChild(input);
     par.appendChild(label);
@@ -426,14 +556,29 @@
   function modoProteina() {
     var perfil = PERFILES[datos.p] || PERFILES.C;
 
+    // Nº de recetas (26-ago-2026, pedido de Claudia). El Menú 2 no lo tenía:
+    // una pieza de carne no se produce "por receta", y en las ~110 filas
+    // históricas de este menú el campo está vacío. Se agregó porque se pidió
+    // poder registrarlo en los tres menús de producción, y va OPCIONAL a
+    // propósito — exigirlo bloquearía a quien trabaje una pieza que no
+    // responde a una receta.
+    titulo('Receta');
+    var recetas = filaSimple('Nº de recetas', 'opcional',
+                             'Admite fracciones: 0,5 es media receta', '—', true);
+
     titulo('Pesos');
     var crudo  = filaSimple('Peso inicial crudo', 'gramos', 'Como llega la pieza');
     var limpio = filaSimple('Peso limpio', 'gramos', 'Después de quitar grasa y recortes');
     var cocido = perfil.cocido
       ? filaSimple('Peso cocido', 'gramos', 'Después de la cocción')
       : null;
+    // El rótulo dice "Merma" a secas desde el 26-ago-2026 (pedido de Claudia).
+    // La clave del payload sigue siendo `aprov` y el campo de Airtable sigue
+    // llamándose "Merma aprovechable": cambió el término que ve el personal,
+    // no el dato. En Airtable ya hay "Merma de limpieza", "de cocción" y "de
+    // porcionamiento", y una columna suelta llamada "Merma" se confundiría.
     var aprov = perfil.aprov
-      ? filaSimple('Merma aprovechable', 'gramos', 'Opcional: recortes que van a consumo interno')
+      ? filaSimple('Merma', 'gramos', 'Opcional: recortes que se aprovechan')
       : null;
 
     var porc = null;
@@ -476,7 +621,7 @@
       });
     }
 
-    var todos = [crudo, limpio, cocido, aprov, porc].filter(Boolean).concat(
+    var todos = [recetas, crudo, limpio, cocido, aprov, porc].filter(Boolean).concat(
       filas.map(function (f) { return f.g; }),
       filas.map(function (f) { return f.p; })
     );
@@ -556,12 +701,12 @@
         if (pesoUtil) lineas.push('Gramos por porción: <b>' + Math.round(pesoUtil / totalPorc) + ' g</b>');
         if (!perfil.porcSuelta) lineas.push('Porciones: <b>' + totalPorc + '</b>');
       }
-      // La merma aprovechable sale de lo que NO se repartió: no puede ser mayor.
+      // La merma sale de lo que NO se repartió: no puede ser mayor.
       if (aprov) {
         var sobrante = base !== null ? base - sumaG : null;
         var excede = vAprov !== null && sobrante !== null && vAprov > sobrante;
         aprov._row.classList.toggle('malo', !!excede);
-        if (excede) problemas.push('La merma aprovechable no puede superar lo que quedó sin repartir');
+        if (excede) problemas.push('La merma no puede superar lo que quedó sin repartir');
       }
       resumen.innerHTML = lineas.join(' · ') || 'Cargá los pesos para ver las mermas.';
 
@@ -590,6 +735,10 @@
         s: datos.s || '',
         w: pesos
       };
+      // `rec` solo viaja si se cargó. Su ausencia significa "no aplica",
+      // nunca "cero recetas".
+      var vRec = num(recetas);
+      if (vRec > 0) salida.rec = vRec;
       // `d` solo viaja en los perfiles que reparten. Su ausencia significa
       // "esta pieza no se distribuye", no "se distribuyó en cero".
       if (perfil.reparto) {
@@ -602,7 +751,88 @@
     revisar();
   }
 
+  /* ---------------------------------------------------------------- receta */
+  // Menú 1 — salsas, aceites y mayonesas. UNA sola preparación, ya elegida en
+  // el chat: acá se cargan las recetas y los gramos, y se ve el límite.
+  //
+  // Por qué no es un formulario con las 37 preparaciones como Panadería: no
+  // entra. Medido el 26-ago-2026, la URL con las 37 da 2.217 caracteres contra
+  // el tope de 2.048 de Telegram, incluso comprimida en base64. Y además casi
+  // nunca se hacen más de una o dos salsas en la misma tanda.
+  //
+  //   {"tipo":"receta","t":"SRIRACHA","s":"PRE-086 · Alicia","u":"g",
+  //    "lim":{"est":530,"min":450,"max":610}}
+  // devuelve
+  //   {"f":"prod-salsas","tipo":"receta","r":0.5,"q":265}
+  function modoReceta() {
+    var unidad = datos.u || 'g';
+    var uCorta = UNIDADES[unidad] ? UNIDADES[unidad].corta : unidad;
+    var uLarga = UNIDADES[unidad] ? UNIDADES[unidad].larga : 'cantidad';
+
+    titulo('Producción');
+    var rec = filaSimple('Nº de recetas', 'admite fracciones',
+                         'Media receta se escribe 0,5 y receta y media 1,5',
+                         '—', true);
+    var cant = filaSimple('Cantidad producida', uLarga,
+                          'El total de la tanda, no lo de una receta', uCorta);
+
+    var resumen = document.createElement('div');
+    resumen.className = 'calc';
+    cuerpo.appendChild(resumen);
+
+    [rec, cant].forEach(function (i) { i.addEventListener('input', revisar); });
+
+    function revisar() {
+      var r = num(rec), q = num(cant);
+      var problemas = [];
+
+      rec._row.classList.toggle('pendiente', !(r > 0));
+      cant._row.classList.toggle('pendiente', !(q > 0));
+      if (!(r > 0)) problemas.push('Falta el nº de recetas');
+      if (!(q > 0)) problemas.push('Falta la cantidad producida');
+
+      var lineas = [];
+      if (r > 0 && q > 0) {
+        lineas.push('Rendimiento: <b>' + redondear(q / r) + ' ' + uCorta + ' por receta</b>');
+      }
+      var base = textoLimite(datos.lim, uCorta);
+      if (base) {
+        var v = veredictoLimite(datos.lim, q, r, uCorta);
+        lineas.push(v ? v.txt : base);
+      }
+      resumen.innerHTML = lineas.join('<br>') ||
+        'Cargá las recetas y la cantidad para ver el rendimiento.';
+
+      if (problemas.length) {
+        tg.MainButton.hide();
+        aviso.style.display = 'block';
+        aviso.textContent = problemas[0];
+      } else {
+        // Fuera de rango NO bloquea: el bot solo captura (D3) y una tanda
+        // desviada es justo la que hay que poder registrar. El aviso queda a
+        // la vista en el resumen, en rojo.
+        aviso.style.display = 'none';
+        tg.MainButton.setText(datos.btn || 'Registrar producción');
+        tg.MainButton.show();
+      }
+    }
+
+    tg.MainButton.onClick(function () {
+      enviar({
+        f: datos.f || 'prod-salsas',
+        tipo: 'receta',
+        t: datos.t || '',
+        s: datos.s || '',
+        r: num(rec),
+        q: num(cant)
+      });
+    });
+
+    revisar();
+  }
+
   if (tipo === 'proteina') modoProteina();
+  else if (tipo === 'receta') modoReceta();
   else modoConteo();
 })();
 </script>

@@ -235,6 +235,10 @@
   // /barra y Existencia cuentan lo que hay, no lo que se hizo, y no mandan `rec`
   // — para ellos esta función se comporta exactamente igual que antes.
   //
+  // Las recetas ADMITEN FRACCIONES: 0,5 es media receta y 1,5 receta y media.
+  // La cantidad no — los gramos y las unidades siguen siendo enteros. La
+  // fracción va en el divisor, nunca en lo producido.
+  //
   // `u` es la unidad de la cantidad ("g" o "und") y solo se usa para rotular.
   function modoConteo() {
     if (!Array.isArray(datos.i) || !datos.i.length) {
@@ -369,8 +373,13 @@
     par.className = 'par';
     var cant = campoRotulado(par, unidad || 'cantidad');
     var rec = campoRotulado(par, 'recetas');
-    rec.step = '1';
-    rec.min = '1';
+    // Fracciones de receta (26-ago-2026, pedido de Alicia): se hacen medias
+    // recetas y recetas y media. Antes esto era step=1 / min=1, y el navegador
+    // rechazaba 0,5 antes de que el dato saliera del telefono; la gente escribia
+    // "1" y el rendimiento salia al doble o a la mitad. Dos decimales alcanzan
+    // para medias y cuartos.
+    rec.step = '0.01';
+    rec.min = '0.01';
 
     row.appendChild(info);
     row.appendChild(par);

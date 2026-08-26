@@ -131,6 +131,18 @@
   document.getElementById('titulo').textContent = datos.t || 'Conteo';
   document.getElementById('subtitulo').textContent = datos.s || '';
 
+  // Abierto como link suelto (no desde el botón azul del mensaje) el botón de
+  // enviar de la mini-app NO existe y el envío es imposible. Avisarlo de una,
+  // antes de que alguien llene 25 casillas para nada.
+  if (!tg.initData) {
+    var fuera = document.createElement('div');
+    fuera.style.cssText = 'margin:12px;padding:12px;border-radius:10px;' +
+      'background:#e0a800;color:#000;font-size:14px;text-align:center;';
+    fuera.textContent = 'Ojo: abriste esto como link y así NO se puede enviar. ' +
+      'Volvé a Telegram y abrí el formulario tocando el botón del mensaje.';
+    document.body.insertBefore(fuera, document.getElementById('cuerpo'));
+  }
+
   var cuerpo = document.getElementById('cuerpo');
   var aviso = document.getElementById('aviso');
   var tipo = datos.tipo || 'conteo';
@@ -272,7 +284,7 @@
         aviso.textContent = 'Faltan ' + faltan + ' dato' + (faltan === 1 ? '' : 's');
       } else {
         aviso.style.display = 'none';
-        tg.MainButton.setText('Enviar (' + filas.length + ' ítems)');
+        tg.MainButton.setText(datos.btn || ('Enviar (' + filas.length + ' ítems)'));
         tg.MainButton.show();
       }
     }
@@ -523,7 +535,7 @@
         aviso.textContent = problemas[0];
       } else {
         aviso.style.display = 'none';
-        tg.MainButton.setText('Enviar producción');
+        tg.MainButton.setText(datos.btn || 'Enviar producción');
         tg.MainButton.show();
       }
     }

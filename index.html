@@ -39,6 +39,14 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .sku { color: var(--hint); font-size: 12px; }
+  /* Qué unidad se está contando. Barra y Cocina van en unidades, Rellenos
+     en gramos, y sin esto las tres pantallas se veían iguales. */
+  .banda-unidad {
+    margin-top: 8px; padding: 7px 10px; border-radius: 8px;
+    background: var(--sec); color: var(--fg);
+    font-size: 13px; font-weight: 600; text-align: center;
+  }
+  .banda-unidad em { font-style: normal; text-transform: uppercase; letter-spacing: .04em; }
   .ayuda { color: var(--hint); font-size: 12px; margin-top: 2px; }
   input[type=number] {
     width: 84px; padding: 10px; text-align: center;
@@ -131,6 +139,20 @@
   document.getElementById('titulo').textContent = datos.t || 'Conteo';
   document.getElementById('subtitulo').textContent = datos.s || '';
 
+  // Rótulo de unidad, arriba de todo. `u` es "g" o "und"; sin `u` no se dibuja
+  // nada y la página queda exactamente como antes.
+  var UNIDADES = {
+    g:   { corta: 'g',   larga: 'gramos' },
+    und: { corta: 'und', larga: 'unidades' },
+  };
+  var uni = UNIDADES[datos.u] || null;
+  if (uni) {
+    var banda = document.createElement('div');
+    banda.className = 'banda-unidad';
+    banda.innerHTML = 'Todas las cantidades en <em>' + uni.larga + '</em>';
+    document.querySelector('header').appendChild(banda);
+  }
+
   // Abierto como link suelto (no desde el botón azul del mensaje) el botón de
   // enviar de la mini-app NO existe y el envío es imposible. Avisarlo de una,
   // antes de que alguien llene 25 casillas para nada.
@@ -170,7 +192,7 @@
   }
 
   // Fila con un solo campo numérico. Devuelve el input.
-  function filaSimple(nombre, sub, ayuda) {
+  function filaSimple(nombre, sub, ayuda, marcador) {
     var row = document.createElement('div');
     row.className = 'row';
     var info = document.createElement('div');
@@ -196,7 +218,7 @@
     input.inputMode = 'decimal';
     input.min = '0';
     input.step = 'any';
-    input.placeholder = '—';
+    input.placeholder = marcador || '—';
     row.appendChild(info);
     row.appendChild(input);
     cuerpo.appendChild(row);
@@ -224,7 +246,7 @@
     var unidad = datos.u || '';
 
     var filas = datos.i.map(function (item) {
-      return conRecetas ? filaConRecetas(item, unidad) : filaSola(item);
+      return conRecetas ? filaConRecetas(item, unidad) : filaSola(item, unidad);
     });
 
     // Todos los campos en orden de tabulación, para que Enter avance.
@@ -314,8 +336,13 @@
   }
 
   // Fila de una sola cantidad — el conteo de toda la vida.
-  function filaSola(item) {
-    var input = filaSimple(item.n, item.k);
+  //
+  // La unidad va de marcador dentro de la casilla ("g" / "und"). Es el único
+  // lugar donde cabe sin ensuciar una lista de 25 ítems, y se ve justo cuando
+  // hace falta: al ir a escribir el número.
+  function filaSola(item, unidad) {
+    var marcador = UNIDADES[unidad] ? UNIDADES[unidad].corta : '';
+    var input = filaSimple(item.n, item.k, '', marcador);
     return { k: item.k, cant: input, rec: null, rend: null };
   }
 

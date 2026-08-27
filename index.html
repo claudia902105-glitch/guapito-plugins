@@ -621,8 +621,12 @@
     var filas = [];
     if (perfil.reparto) {
       titulo('Distribución entre recetas');
-      var recetas = Array.isArray(datos.r) ? datos.r : [];
-      filas = recetas.map(function (r) {
+      // `destinos`, no `recetas`: arriba ya hay un `var recetas` que es el INPUT del
+      // nº de recetas, y `var` es de función, no de bloque. Llamar igual a las dos cosas
+      // pisaba el input con este array y `todos.forEach` reventaba — el formulario de los
+      // perfiles B y C moría antes de mostrar el botón de enviar (26-ago-2026).
+      var destinos = Array.isArray(datos.r) ? datos.r : [];
+      filas = destinos.map(function (r) {
         var row = document.createElement('div');
         row.className = 'row';
         var info = document.createElement('div');

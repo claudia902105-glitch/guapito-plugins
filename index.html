@@ -453,9 +453,19 @@
     revisar();
   }
 
-  // Un decimal, y sin el ".0" cuando es redondo.
+  // Un decimal, y sin el ",0" cuando es redondo. Lleva punto de miles y coma
+  // decimal, igual que las casillas donde se escribe (26-ago-2026): antes esto
+  // devolvía `String(n)` pelado, así que en el mismo renglón podía leerse
+  // "→ 5000 g por receta · Esperado 4.800 g" — el separador puesto para hacer
+  // visible un cero de más faltaba justo en el número calculado.
   function redondear(n) {
-    return String(Math.round(n * 10) / 10);
+    if (n === null || n === undefined || isNaN(n)) return '';
+    var r = Math.round(n * 10) / 10;
+    var ent = Math.floor(Math.abs(r));
+    var dec = Math.round((Math.abs(r) - ent) * 10);
+    var s = String(ent).replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+    if (dec) s += ',' + dec;
+    return (r < 0 ? '-' : '') + s;
   }
 
   // Fila de una sola cantidad — el conteo de toda la vida.
@@ -680,26 +690,26 @@
 
       var lineas = [];
       if (vCrudo !== null && vLimpio !== null) {
-        lineas.push('Merma de limpieza: <b>' + (vCrudo - vLimpio) + ' g</b>');
+        lineas.push('Merma de limpieza: <b>' + miles(vCrudo - vLimpio) + ' g</b>');
       }
       if (vLimpio !== null && vCocido !== null) {
-        lineas.push('Merma de cocción: <b>' + (vLimpio - vCocido) + ' g</b>');
+        lineas.push('Merma de cocción: <b>' + miles(vLimpio - vCocido) + ' g</b>');
       }
       if (perfil.reparto && base !== null) {
         var falta = base - sumaG;
-        lineas.push('Repartido: <b>' + sumaG + ' de ' + base + ' g</b>' +
-          (Math.abs(falta) < 1 ? ' ✓' : (falta > 0 ? ' — faltan ' + falta + ' g' : ' — sobran ' + (-falta) + ' g')));
+        lineas.push('Repartido: <b>' + miles(sumaG) + ' de ' + miles(base) + ' g</b>' +
+          (Math.abs(falta) < 1 ? ' ✓' : (falta > 0 ? ' — faltan ' + miles(falta) + ' g' : ' — sobran ' + miles(-falta) + ' g')));
         if (sumaG > base) problemas.push('Estás repartiendo más de lo que quedó');
       }
       if (vCrudo) {
         var salida = perfil.reparto ? sumaG : vLimpio;
-        if (salida) lineas.push('Rendimiento: <b>' + Math.round(salida / vCrudo * 1000) / 10 + '%</b>');
+        if (salida) lineas.push('Rendimiento: <b>' + redondear(salida / vCrudo * 100) + '%</b>');
       }
       var totalPorc = perfil.porcSuelta ? vPorc : sumaP;
       if (totalPorc) {
         var pesoUtil = perfil.reparto ? sumaG : vLimpio;
-        if (pesoUtil) lineas.push('Gramos por porción: <b>' + Math.round(pesoUtil / totalPorc) + ' g</b>');
-        if (!perfil.porcSuelta) lineas.push('Porciones: <b>' + totalPorc + '</b>');
+        if (pesoUtil) lineas.push('Gramos por porción: <b>' + miles(pesoUtil / totalPorc) + ' g</b>');
+        if (!perfil.porcSuelta) lineas.push('Porciones: <b>' + miles(totalPorc) + '</b>');
       }
       // La merma sale de lo que NO se repartió: no puede ser mayor.
       if (aprov) {

@@ -78,6 +78,21 @@
   .lim { font-size: 12px; margin-top: 2px; color: var(--hint); }
   .lim.bien { color: #2e9e4f; }
   .lim.mal  { color: #d33; font-weight: 600; }
+  /* Selector de motivo (Menú 5 · Fruver). Son dos opciones excluyentes y van
+     como botones a la vista, no como lista desplegable: un <select> en
+     Telegram abre la rueda nativa del sistema, que tapa media pantalla y
+     encima llega con la primera opción ya elegida. */
+  .opciones { display: flex; gap: 8px; margin-bottom: 8px; }
+  .opciones.pendiente { outline: 2px solid #e0a800; border-radius: 12px; }
+  .chip {
+    flex: 1; padding: 12px 8px; border-radius: 10px;
+    background: var(--sec); color: var(--fg);
+    border: 2px solid transparent;
+    font-size: 15px; font-weight: 600; text-align: center;
+    cursor: pointer; user-select: none;
+  }
+  .chip.puesto { border-color: var(--link); }
+  .chip .ayuda { font-weight: 400; margin-top: 2px; }
   #aviso {
     position: fixed; left: 12px; right: 12px; bottom: 12px;
     padding: 12px; border-radius: 10px;
@@ -117,6 +132,8 @@
   //     p = perfil de la proteína (ver PERFILES); r = recetas destino, solo B y C
   //   tipo "receta"   (Menú 1)     → {"t","s","u":"g","lim":{"est","min","max"}}
   //     una sola preparación, ya elegida en el chat: recetas + cantidad
+  //   tipo "fruver"   (Menú 5)     → {"t","s","tope":500}
+  //     una sola fruta o verdura: motivo + peso inicial + peso final
   //
   // `lim` (opcional, en el ítem o en la raíz) es el límite de producción
   // ESPERADO POR UNA RECETA, sacado de la tabla `Rendimientos y tolerancias`.
@@ -841,8 +858,139 @@
     revisar();
   }
 
+  /* ---------------------------------------------------------------- fruver */
+  // Menú 5 — merma de frutas y verduras (27-ago-2026, pedido de Claudia).
+  //
+  // Es la forma del Menú 2 recortada a dos pesos: entran 12 kg de cebolla,
+  // salen 9,5 kg limpios, y los 2,5 kg de diferencia son la merma. Lo que se
+  // quería ver es el PORCENTAJE: 500 g botados no dicen nada hasta saber si
+  // salieron de 2 kg (25%) o de 20 kg (2,5%), y el porcentaje es lo único que
+  // hace comparable una cebolla con una piña.
+  //
+  //   {"tipo":"fruver","t":"CEBOLLA CABEZONA BLANCA PELADA",
+  //    "s":"070055 · Alicia","tope":500}
+  // devuelve
+  //   {"f":"prod-fruver","tipo":"fruver","m":"Limpieza","ini":12000,"fin":9500}
+  //
+  // El motivo va PRIMERO y arranca sin elegir. Preseleccionar "Limpieza"
+  // haría que el daño —el único de los dos que hay que ir a reclamarle al
+  // proveedor— se registre como merma normal cada vez que alguien manda sin
+  // mirar, y el dato que se quería separar quedaría enterrado.
+  var MOTIVOS_MERMA = [
+    { v: 'Limpieza', ayuda: 'Cáscara, tallos, semillas' },
+    { v: 'Daño',     ayuda: 'Partes podridas o inservibles' }
+  ];
+
+  // Regla de Claudia (27-ago-2026): una limpieza no debería botar más de
+  // 500 g. Viaja en `tope` para poder cambiarla desde el bot sin tocar esta
+  // página; el valor de acá es solo el piso si el formulario llega sin él.
+  var TOPE_MERMA = 500;
+
+  function modoFruver() {
+    var tope = datos.tope > 0 ? datos.tope : TOPE_MERMA;
+
+    titulo('Motivo');
+    var caja = document.createElement('div');
+    caja.className = 'opciones';
+    var motivo = null;
+    var chips = MOTIVOS_MERMA.map(function (m) {
+      var b = document.createElement('div');
+      b.className = 'chip';
+      var quien = document.createElement('div');
+      quien.textContent = m.v;
+      var ayuda = document.createElement('div');
+      ayuda.className = 'ayuda';
+      ayuda.textContent = m.ayuda;
+      b.appendChild(quien);
+      b.appendChild(ayuda);
+      b.addEventListener('click', function () {
+        motivo = m.v;
+        chips.forEach(function (c) { c.classList.remove('puesto'); });
+        b.classList.add('puesto');
+        revisar();
+      });
+      caja.appendChild(b);
+      return b;
+    });
+    cuerpo.appendChild(caja);
+
+    titulo('Pesos');
+    var ini = filaSimple('Peso inicial', 'gramos', 'Como llega, antes de limpiar');
+    var fin = filaSimple('Peso final', 'gramos', 'Lo que queda aprovechable');
+
+    var resumen = document.createElement('div');
+    resumen.className = 'calc';
+    cuerpo.appendChild(resumen);
+
+    [ini, fin].forEach(function (i) { i.addEventListener('input', revisar); });
+
+    function revisar() {
+      var vIni = num(ini), vFin = num(fin);
+      var problemas = [];
+
+      caja.classList.toggle('pendiente', !motivo);
+      if (!motivo) problemas.push('Falta el motivo: limpieza o daño');
+
+      // El peso final SÍ puede ser cero —una caja entera podrida es cero
+      // aprovechable— así que se pregunta si está vacío, no si es mayor que
+      // cero. El inicial no: cero no es un peso, es una casilla sin llenar.
+      ini._row.classList.toggle('pendiente', !(vIni > 0));
+      fin._row.classList.toggle('pendiente', vFin === null);
+      if (!(vIni > 0)) problemas.push('Falta el peso inicial');
+      if (vFin === null) problemas.push('Falta el peso final');
+
+      // Un final mayor que el inicial es un dedazo. Si entra así la merma
+      // sale negativa y arruina el promedio del ítem para siempre.
+      var sube = vIni !== null && vFin !== null && vFin > vIni;
+      fin._row.classList.toggle('malo', sube);
+      if (sube) problemas.push('El peso final no puede ser mayor que el inicial');
+
+      var lineas = [];
+      if (vIni > 0 && vFin !== null && !sube) {
+        var merma = vIni - vFin;
+        lineas.push('Merma: <b>' + miles(merma) + ' g</b> — <b>' +
+                    redondear(merma / vIni * 100) + '%</b> del peso inicial');
+        lineas.push(merma > tope
+          ? '⚠️ Se pasa del tope de ' + miles(tope) + ' g'
+          : '✅ Dentro del tope de ' + miles(tope) + ' g');
+      }
+      resumen.innerHTML = lineas.join('<br>') ||
+        'Elegí el motivo y cargá los dos pesos para ver la merma.';
+
+      if (problemas.length) {
+        tg.MainButton.hide();
+        aviso.style.display = 'block';
+        aviso.textContent = problemas[0];
+      } else {
+        // Pasarse del tope AVISA, no bloquea — la misma regla que los límites
+        // de producción (D3). La tanda que se fue de merma es justo la que hay
+        // que poder registrar; si el formulario la rechaza, no se registra
+        // nada y el problema queda invisible, que es lo contrario de lo que
+        // se buscaba.
+        aviso.style.display = 'none';
+        tg.MainButton.setText(datos.btn || 'Registrar merma');
+        tg.MainButton.show();
+      }
+    }
+
+    tg.MainButton.onClick(function () {
+      enviar({
+        f: datos.f || 'prod-fruver',
+        tipo: 'fruver',
+        t: datos.t || '',
+        s: datos.s || '',
+        m: motivo,
+        ini: num(ini),
+        fin: num(fin)
+      });
+    });
+
+    revisar();
+  }
+
   if (tipo === 'proteina') modoProteina();
   else if (tipo === 'receta') modoReceta();
+  else if (tipo === 'fruver') modoFruver();
   else modoConteo();
 })();
 </script>

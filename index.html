@@ -128,12 +128,17 @@
   //     /barra, /produccion Existencia, /rellenos Existencia
   //     + opcional {"rec":1,"u":"g"} → segunda columna de recetas y rendimiento
   //       en vivo; lo usan producción de panadería (Menú 3) y de rellenos (Menú 4)
-  //   tipo "proteina" (Menú 2)     → {"t","s","p":"A"|"B"|"C","r":[{"k","n"}]}
+  //   tipo "proteina" (Menú 2)     → {"t","s","p":"A"|"B"|"C","r":[{"k","n","lim"}]}
   //     p = perfil de la proteína (ver PERFILES); r = recetas destino, solo B y C
+  //     + `lim` en cada receta destino (1-sep-2026) es opcional: sin él, esa
+  //       fila no muestra alerta de gramaje por porción. Se compara gramos
+  //       repartidos ÷ porciones asignadas DE ESA FILA, no el total.
+  //     + opcional {"sp":{"k","n","lim"}} → subproducto del mismo proceso
+  //       (morrillo → caldo de birria): una casilla más, en gramos
   //   tipo "receta"   (Menú 1)     → {"t","s","u":"g","lim":{"est","min","max"}}
   //     una sola preparación, ya elegida en el chat: recetas + cantidad
   //   tipo "fruver"   (Menú 5)     → {"t","s","tope":500}
-  //     una sola fruta o verdura: motivo + peso inicial + peso final
+  //     una sola fruta o verdura: motivo + gramos de merma
   //
   // `lim` (opcional, en el ítem o en la raíz) es el límite de producción
   // ESPERADO POR UNA RECETA, sacado de la tabla `Rendimientos y tolerancias`.
@@ -264,26 +269,30 @@
   //
   // Sale de la tabla `Rendimientos y tolerancias` de Airtable. No todos los
   // ítems tienen fila, así que `lim` es opcional: sin él no se dibuja nada.
-  function textoLimite(lim, unidad) {
+  // `etiqueta` es opcional (default 'por receta'): la Distribución entre
+  // recetas de proteínas (1-sep-2026) reusa esta misma función pero compara
+  // gramos ÷ porciones, así que el texto dice 'por porción'.
+  function textoLimite(lim, unidad, etiqueta) {
     if (!lim || !(lim.est > 0)) return '';
     var u = unidad ? ' ' + unidad : '';
     var rango = (lim.min > 0 && lim.max > 0)
       ? ' · rango ' + miles(lim.min) + '–' + miles(lim.max) + u
       : '';
-    return 'Esperado ' + miles(lim.est) + u + ' por receta' + rango;
+    return 'Esperado ' + miles(lim.est) + u + ' ' + (etiqueta || 'por receta') + rango;
   }
 
   // Devuelve null cuando todavía no hay con qué comparar. Nunca bloquea el
   // envío: avisa. Una tanda fuera de rango es un dato, no un error de carga.
-  function veredictoLimite(lim, q, r, unidad) {
+  function veredictoLimite(lim, q, r, unidad, etiqueta) {
     if (!lim || !(lim.min > 0) || !(lim.max > 0) || !(q > 0) || !(r > 0)) return null;
-    var porReceta = q / r;
+    var porUnidad = q / r;
     var u = unidad ? ' ' + unidad : '';
-    var cuanto = miles(porReceta) + u + ' por receta';
-    if (porReceta < lim.min) {
+    var et = etiqueta || 'por receta';
+    var cuanto = miles(porUnidad) + u + ' ' + et;
+    if (porUnidad < lim.min) {
       return { ok: false, txt: '\u26a0\ufe0f ' + cuanto + ' — por DEBAJO del mínimo (' + miles(lim.min) + u + ')' };
     }
-    if (porReceta > lim.max) {
+    if (porUnidad > lim.max) {
       return { ok: false, txt: '\u26a0\ufe0f ' + cuanto + ' — por ENCIMA del máximo (' + miles(lim.max) + u + ')' };
     }
     return { ok: true, txt: '\u2705 ' + cuanto + ' — dentro del rango' };
@@ -614,6 +623,22 @@
       porc = filaSimple('Porciones resultantes', 'unidades');
     }
 
+    // Subproducto del mismo proceso (30-ago-2026, pedido de Claudia). El caldo
+    // de birria sale de la misma olla que el morrillo: mientras se reportaba
+    // aparte por el Menú 1, dependía de que alguien se acordara de registrarlo
+    // el mismo día. Viaja en `sp` y solo aparece si la proteína lo tiene
+    // cargado en Airtable (`Subproducto de producción`).
+    //
+    // Es obligatorio pero ACEPTA CERO: cero significa "esta vez no salió", y
+    // el bot entonces no escribe la fila del subproducto. Dejarlo vacío no
+    // vale — la gracia es que sea una respuesta consciente, no un olvido.
+    var sub = null;
+    if (datos.sp && datos.sp.n) {
+      titulo('Subproducto');
+      sub = filaSimple(datos.sp.n, 'gramos',
+                       'Sale del mismo proceso · 0 si esta vez no salió');
+    }
+
     var resumen = document.createElement('div');
     resumen.className = 'calc';
     cuerpo.appendChild(resumen);
@@ -645,14 +670,26 @@
         var g = campoRotulado(par, 'gramos');
         var p = campoRotulado(par, 'porciones');
 
+        // Alerta por receta destino (1-sep-2026, pedido de Alicia — "como con
+        // las salsas y mayonesas"): compara gramos ÷ porciones de ESTA fila
+        // contra su propio Mínimo/Máximo (proteína), no contra el total
+        // repartido. Igual que en los demás menús, sin `lim` no se dibuja nada.
+        var lim = null;
+        if (r.lim && r.lim.est > 0) {
+          lim = document.createElement('div');
+          lim.className = 'lim';
+          lim.textContent = textoLimite(r.lim, 'g', 'por porción');
+          info.appendChild(lim);
+        }
+
         row.appendChild(info);
         row.appendChild(par);
         cuerpo.appendChild(row);
-        return { k: r.k, row: row, g: g, p: p };
+        return { k: r.k, row: row, g: g, p: p, lim: lim, tope: r.lim || null };
       });
     }
 
-    var todos = [recetas, crudo, limpio, cocido, aprov, porc].filter(Boolean).concat(
+    var todos = [recetas, crudo, limpio, cocido, aprov, porc, sub].filter(Boolean).concat(
       filas.map(function (f) { return f.g; }),
       filas.map(function (f) { return f.p; })
     );
@@ -670,6 +707,9 @@
                           { i: limpio, n: 'Falta el peso limpio' }];
       if (cocido) obligatorios.push({ i: cocido, n: 'Falta el peso cocido' });
       if (porc)   obligatorios.push({ i: porc, n: 'Faltan las porciones resultantes' });
+      if (sub)    obligatorios.push({ i: sub,
+                                      n: 'Falta el gramaje de ' + datos.sp.n +
+                                         ' — poné 0 si esta vez no salió' });
       obligatorios.forEach(function (o) {
         var vacio = num(o.i) === null;
         o.i._row.classList.toggle('pendiente', vacio);
@@ -703,6 +743,13 @@
         f.row.classList.toggle('pendiente', (g === null) !== (p === null));
         if ((g === null) !== (p === null)) {
           problemas.push('Completá gramos y porciones en ' + f.k);
+        }
+        // Alerta por receta destino, nunca bloquea el envío (D3): el gramaje
+        // real por porción vs. el de costeo es un dato, no un error de carga.
+        if (f.lim) {
+          var vv = veredictoLimite(f.tope, g, p, 'g', 'por porción');
+          f.lim.className = 'lim' + (vv ? (vv.ok ? ' bien' : ' mal') : '');
+          f.lim.textContent = vv ? vv.txt : textoLimite(f.tope, 'g', 'por porción');
         }
       });
       if (perfil.reparto && !conDato) {
@@ -739,6 +786,13 @@
         aprov._row.classList.toggle('malo', !!excede);
         if (excede) problemas.push('La merma no puede superar lo que quedó sin repartir');
       }
+      // El subproducto se mide contra su propio rendimiento por receta, no
+      // contra el peso de la carne: son dos cosas que salen de la misma olla.
+      if (sub && num(sub) > 0) {
+        var vSub = num(sub);
+        var vv = veredictoLimite(datos.sp.lim, vSub, num(recetas), 'g');
+        lineas.push(datos.sp.n + ': ' + (vv ? vv.txt : '<b>' + miles(vSub) + ' g</b>'));
+      }
       resumen.innerHTML = lineas.join(' · ') || 'Cargá los pesos para ver las mermas.';
 
       if (problemas.length) {
@@ -770,6 +824,9 @@
       // nunca "cero recetas".
       var vRec = num(recetas);
       if (vRec > 0) salida.rec = vRec;
+      // `sub` solo viaja si salió algo. Su ausencia significa "esta tanda no
+      // dejó subproducto", y el bot no escribe la fila.
+      if (sub && num(sub) > 0) salida.sub = { k: datos.sp.k, g: num(sub) };
       // `d` solo viaja en los perfiles que reparten. Su ausencia significa
       // "esta pieza no se distribuye", no "se distribuyó en cero".
       if (perfil.reparto) {
@@ -865,16 +922,20 @@
   /* ---------------------------------------------------------------- fruver */
   // Menú 5 — merma de frutas y verduras (27-ago-2026, pedido de Claudia).
   //
-  // Es la forma del Menú 2 recortada a dos pesos: entran 12 kg de cebolla,
-  // salen 9,5 kg limpios, y los 2,5 kg de diferencia son la merma. Lo que se
-  // quería ver es el PORCENTAJE: 500 g botados no dicen nada hasta saber si
-  // salieron de 2 kg (25%) o de 20 kg (2,5%), y el porcentaje es lo único que
-  // hace comparable una cebolla con una piña.
+  // Desde el 30-ago-2026 pide UN SOLO número: los gramos que se botaron. Antes
+  // pedía peso inicial y peso final y sacaba la merma por diferencia, pero el
+  // peso inicial ya está en el reporte de compras del POS y pedirlo dos veces
+  // solo agrega una casilla que alguien va a llenar a ojo.
+  //
+  // Lo que se pierde con eso es el PORCENTAJE en el registro: 500 g botados no
+  // dicen lo mismo sobre 2 kg (25%) que sobre 20 kg (2,5%). Ese cálculo se hace
+  // ahora aparte, cruzando la merma contra lo comprado en el POS — decidido con
+  // Claudia el 30-ago-2026.
   //
   //   {"tipo":"fruver","t":"CEBOLLA CABEZONA BLANCA PELADA",
   //    "s":"070055 · Alicia","tope":500}
   // devuelve
-  //   {"f":"prod-fruver","tipo":"fruver","m":"Limpieza","ini":12000,"fin":9500}
+  //   {"f":"prod-fruver","tipo":"fruver","m":"Limpieza","merma":2500}
   //
   // El motivo va PRIMERO y arranca sin elegir. Preseleccionar "Limpieza"
   // haría que el daño —el único de los dos que hay que ir a reclamarle al
@@ -918,48 +979,37 @@
     });
     cuerpo.appendChild(caja);
 
-    titulo('Pesos');
-    var ini = filaSimple('Peso inicial', 'gramos', 'Como llega, antes de limpiar');
-    var fin = filaSimple('Peso final', 'gramos', 'Lo que queda aprovechable');
+    titulo('Merma');
+    var merma = filaSimple('Merma', 'gramos', 'Lo que se botó de este ítem');
 
     var resumen = document.createElement('div');
     resumen.className = 'calc';
     cuerpo.appendChild(resumen);
 
-    [ini, fin].forEach(function (i) { i.addEventListener('input', revisar); });
+    merma.addEventListener('input', revisar);
 
     function revisar() {
-      var vIni = num(ini), vFin = num(fin);
+      var vMerma = num(merma);
       var problemas = [];
 
       caja.classList.toggle('pendiente', !motivo);
       if (!motivo) problemas.push('Falta el motivo: limpieza o daño');
 
-      // El peso final SÍ puede ser cero —una caja entera podrida es cero
-      // aprovechable— así que se pregunta si está vacío, no si es mayor que
-      // cero. El inicial no: cero no es un peso, es una casilla sin llenar.
-      ini._row.classList.toggle('pendiente', !(vIni > 0));
-      fin._row.classList.toggle('pendiente', vFin === null);
-      if (!(vIni > 0)) problemas.push('Falta el peso inicial');
-      if (vFin === null) problemas.push('Falta el peso final');
-
-      // Un final mayor que el inicial es un dedazo. Si entra así la merma
-      // sale negativa y arruina el promedio del ítem para siempre.
-      var sube = vIni !== null && vFin !== null && vFin > vIni;
-      fin._row.classList.toggle('malo', sube);
-      if (sube) problemas.push('El peso final no puede ser mayor que el inicial');
+      // Acá cero NO es un dato: si no se botó nada, no hay merma que
+      // registrar. Es distinto del peso final de antes, donde el cero sí valía
+      // (una caja entera podrida deja cero aprovechable).
+      merma._row.classList.toggle('pendiente', !(vMerma > 0));
+      if (!(vMerma > 0)) problemas.push('Falta el gramaje de la merma');
 
       var lineas = [];
-      if (vIni > 0 && vFin !== null && !sube) {
-        var merma = vIni - vFin;
-        lineas.push('Merma: <b>' + miles(merma) + ' g</b> — <b>' +
-                    redondear(merma / vIni * 100) + '%</b> del peso inicial');
-        lineas.push(merma > tope
+      if (vMerma > 0) {
+        lineas.push('Merma: <b>' + miles(vMerma) + ' g</b>');
+        lineas.push(vMerma > tope
           ? '⚠️ Se pasa del tope de ' + miles(tope) + ' g'
           : '✅ Dentro del tope de ' + miles(tope) + ' g');
       }
       resumen.innerHTML = lineas.join('<br>') ||
-        'Elegí el motivo y cargá los dos pesos para ver la merma.';
+        'Elegí el motivo y cargá los gramos de merma.';
 
       if (problemas.length) {
         tg.MainButton.hide();
@@ -984,8 +1034,7 @@
         t: datos.t || '',
         s: datos.s || '',
         m: motivo,
-        ini: num(ini),
-        fin: num(fin)
+        merma: num(merma)
       });
     });
 

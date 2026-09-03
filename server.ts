@@ -128,6 +128,30 @@ function defaultAccess(): Access {
 const MAX_CHUNK_LIMIT = 4096
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 
+// Instrumentación de latencia. Apagada salvo TELEGRAM_TIMING=1, y cuando está
+// apagada el comportamiento es idéntico al de siempre: el mapa nunca se puebla
+// y timing() sale en la primera línea.
+//
+// Mide el viaje completo de un mensaje y lo parte en tramos, para saber si el
+// tiempo se va en la infra (red, Telegram, este proceso) o dentro del turno de
+// Claude. NO puede ver adentro del turno: las llamadas a Airtable pasan por
+// otro servidor MCP. Si el turno resulta ser el culpable, el siguiente paso es
+// mirar la sesión, no este archivo.
+const TIMING = process.env.TELEGRAM_TIMING === '1'
+
+// chat_id → cuándo entró su último mensaje. Si alguien escribe dos veces antes
+// de que Claude conteste, la segunda pisa a la primera: el turno se mide desde
+// lo último que escribió, que es lo que la persona está esperando.
+const inboundAt = new Map<string, number>()
+
+// Nunca registra el texto de los mensajes — solo ids, largos y milisegundos.
+function timing(evento: string, campos: Record<string, unknown>): void {
+  if (!TIMING) return
+  process.stderr.write(
+    `telegram timing ${JSON.stringify({ evento, ts: new Date().toISOString(), ...campos })}\n`,
+  )
+}
+
 // reply's files param takes any path. .env is ~60 bytes and ships as a
 // document. Claude can already Read+paste file contents, so this isn't a new
 // exfil channel for arbitrary paths — but the server's own state is the one
@@ -529,6 +553,8 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
   try {
     switch (req.params.name) {
       case 'reply': {
+        // Momento en que Claude decide contestar: cierra el tramo del turno.
+        const tReply = Date.now()
         const chat_id = args.chat_id as string
         const text = args.text as string
         const reply_to = args.reply_to != null ? Number(args.reply_to) : undefined
@@ -561,6 +587,10 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
         const replyMode = access.replyToMode ?? 'first'
         const chunks = chunk(text, limit, mode)
         const sentIds: number[] = []
+
+        // Separa nuestra propia validación (statSync/realpathSync de adjuntos,
+        // lecturas de access.json) del tiempo de red hacia Telegram.
+        const tEnvio = Date.now()
 
         try {
           for (let i = 0; i < chunks.length; i++) {
@@ -602,6 +632,24 @@ mcp.setRequestHandler(CallToolRequestSchema, async req => {
             const sent = await bot.api.sendDocument(chat_id, input, opts)
             sentIds.push(sent.message_id)
           }
+        }
+
+        if (TIMING) {
+          const entrada = inboundAt.get(chat_id)
+          inboundAt.delete(chat_id)
+          timing('reply', {
+            chat: chat_id,
+            // El tramo grande: desde que el mensaje entró a este proceso hasta
+            // que Claude llamó a reply. Es inferencia + todas sus tool calls
+            // (Airtable incluido). null = no hubo inbound previo (mensaje que
+            // Claude manda por su cuenta, no una respuesta).
+            turno_claude_ms: entrada != null ? tReply - entrada : null,
+            validacion_ms: tEnvio - tReply,
+            envio_telegram_ms: Date.now() - tEnvio,
+            chunks: chunks.length,
+            files: files.length,
+            chars: text.length,
+          })
         }
 
         const result =
@@ -936,7 +984,9 @@ async function handleInbound(
   downloadImage: (() => Promise<string | undefined>) | undefined,
   attachment?: AttachmentMeta,
 ): Promise<void> {
+  const tEntrada = Date.now()
   const result = gate(ctx)
+  const tGate = Date.now()
 
   if (result.action === 'drop') return
 
@@ -952,6 +1002,26 @@ async function handleInbound(
   const from = ctx.from!
   const chat_id = String(ctx.chat!.id)
   const msgId = ctx.message?.message_id
+
+  if (TIMING) {
+    // Cota de memoria: si Claude nunca contesta un chat, su marca quedaría
+    // colgada. 200 chats es de sobra para un bot; al pasarse, se limpia.
+    if (inboundAt.size > 200) inboundAt.clear()
+    inboundAt.set(chat_id, tEntrada)
+    // ctx.message.date es el reloj de Telegram, con resolución de UN SEGUNDO y
+    // sujeto a desfase con el reloj del servidor. Sirve para detectar retrasos
+    // grandes (decenas de segundos), no para medir milisegundos: un valor de
+    // ±1000ms, negativo incluido, es ruido esperable, no un hallazgo.
+    const tgDate = (ctx.message?.date ?? 0) * 1000
+    timing('inbound', {
+      chat: chat_id,
+      msg: msgId ?? null,
+      lag_telegram_ms: tgDate ? tEntrada - tgDate : null,
+      gate_ms: tGate - tEntrada,
+      chars: text.length,
+      adjunto: attachment?.kind ?? (downloadImage ? 'photo' : null),
+    })
+  }
 
   // Permission-reply intercept: if this looks like "yes xxxxx" for a
   // pending permission request, emit the structured event instead of

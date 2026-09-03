@@ -1,0 +1,3 @@
+# El script `start` corre `bun install`, así que node_modules aparece en
+# cualquier máquina donde se ejecute el server. Nunca va al repo.
+node_modules/

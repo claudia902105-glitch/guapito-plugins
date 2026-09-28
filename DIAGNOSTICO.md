@@ -63,6 +63,18 @@ telegram timing {"evento":"reply","chat":"123","turno_claude_ms":24800,"validaci
 
 ## Paso 4 — Leer los números
 
+Hay un script que hace esta lectura y devuelve el veredicto directamente, así
+que no hace falta interpretar el JSON a ojo:
+
+```sh
+journalctl -u <servicio> --since "-2h" | bun analizar-timing.ts
+bun analizar-timing.ts < /ruta/al/log
+```
+
+Ignora las líneas que no son de timing, así que se le puede tirar el log
+completo sin filtrar. Lo que sigue es la tabla que aplica por dentro, para
+poder discutir el resultado en vez de confiar en él.
+
 | Campo | Qué mide | Normal | Sospechoso |
 | --- | --- | --- | --- |
 | `lag_telegram_ms` | Telegram → este proceso | < 1500 ms | > 5000 ms sostenido |

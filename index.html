@@ -90,6 +90,32 @@
     background: var(--sec); color: var(--fg);
     font-size: 13px; font-weight: 600;
   }
+  .fecha-mermas {
+    padding: 10px; margin-bottom: 10px; border-radius: 10px;
+    background: var(--sec);
+  }
+  .fecha-mermas.alerta { background: #ffe8a3; color: #000; }
+  .fecha-mermas label { display: block; font-size: 12px; color: var(--hint); margin-bottom: 4px; }
+  .fecha-mermas.alerta label, .fecha-mermas.alerta .ayuda { color: #5f4600; }
+  .fecha-mermas input {
+    width: 100%; padding: 10px; font-size: 17px; font-weight: 600;
+    border: 1px solid rgba(128,128,128,.35); border-radius: 8px;
+    background: var(--bg); color: var(--fg);
+  }
+  .banner-borrador {
+    padding: 10px; margin-bottom: 10px; border-radius: 10px;
+    background: #e6f2ff; color: #074b7a; font-size: 14px;
+  }
+  .banner-borrador button {
+    margin-left: 8px; padding: 6px 8px; border: 0; border-radius: 8px;
+    background: var(--link); color: #fff; font-weight: 600;
+  }
+  .seccion-mermas.oculta { display: none; }
+  .row-merma { align-items: flex-start; }
+  .row-merma .par { flex: none; }
+  .row-merma .par input { width: 76px; }
+  .par label.alerta input { border-color: #d64545; outline: 2px solid #d64545; }
+  .aviso-casilla { min-height: 14px; font-size: 10px; color: #d33; text-align: center; }
   .error-catalogo {
     padding: 12px; border-radius: 10px;
     background: #fbe3e3; color: #b00020; font-size: 14px;
@@ -156,6 +182,9 @@
   //   tipo "salsas"   (Menú 1)     → {"f","t","s","u":"g","v","btn"}
   //     todas las preparaciones del catálogo `catalogos/menu1.json?v=<v>`;
   //     `v` debe coincidir con el bot o no se dibuja el formulario
+  //   tipo "mermas"   (Menú 5)     → {"f","t","s","u":"g","v","hoy","tope","btn"}
+  //     todas las frutas y verduras del catálogo `catalogos/fruver.json?v=<v>`;
+  //     cada fila separa Limpieza (`l`) y Daño (`x`) porque no se mezclan motivos
   //   tipo "fruver"   (Menú 5)     → {"t","s","tope":500}
   //     una sola fruta o verdura: motivo + gramos de merma
   //
@@ -798,6 +827,406 @@
     };
   }
 
+  /* ---------------------------------------------------------------- mermas */
+  // Menú 5 nuevo — todas las mermas de fruver en una sola carga. Igual que
+  // salsas, el catálogo se descarga por versión: si la página y el bot no
+  // miran el mismo JSON, no se dibuja nada para no mandar SKUs invisibles.
+  //
+  // Limpieza y Daño viajan separados por fila (`l` y `x`) porque son dos datos
+  // accionables distintos: mezclar el daño del proveedor con la limpieza normal
+  // dejaría la alerta enterrada dentro de un total.
+  var CLAVE_BORRADOR_MERMAS = 'guapito-borrador-mermas';
+  var HORAS_BORRADOR_MERMAS = 18;
+
+  function modoMermas() {
+    if (!datos.v) {
+      mostrarErrorCatalogo('El catálogo de la página no coincide con el del bot. Avisale a Claudia.');
+      return;
+    }
+
+    var cargando = document.createElement('div');
+    cargando.className = 'calc';
+    cargando.textContent = 'Cargando frutas y verduras…';
+    cuerpo.appendChild(cargando);
+
+    fetch('catalogos/fruver.json?v=' + encodeURIComponent(datos.v))
+      .then(function (r) {
+        if (!r || r.ok === false) throw new Error('fetch');
+        return r.json();
+      })
+      .then(function (cat) {
+        cargando.style.display = 'none';
+        if (!cat || cat.v !== datos.v || !Array.isArray(cat.i)) {
+          mostrarErrorCatalogo('El catálogo de la página no coincide con el del bot. Avisale a Claudia.');
+          return;
+        }
+        dibujarMermas(cat.i);
+      })
+      .catch(function () {
+        cargando.style.display = 'none';
+        mostrarErrorCatalogo('No se pudo cargar el catálogo de fruver. Avisale a Claudia.');
+      });
+  }
+
+  function dibujarMermas(items) {
+    var tope = datos.tope > 0 ? datos.tope : TOPE_MERMA;
+    var hoy = fechaIsoValidaMermas(datos.hoy) ? datos.hoy : '';
+    var min = hoy ? moverFechaMermas(hoy, -14) : '';
+
+    var fechaCaja = document.createElement('div');
+    fechaCaja.className = 'fecha-mermas';
+    var fechaLabel = document.createElement('label');
+    fechaLabel.textContent = 'Fecha de las mermas';
+    var fecha = document.createElement('input');
+    fecha.type = 'date';
+    fecha.value = hoy;
+    if (hoy) fecha.max = hoy;
+    if (min) fecha.min = min;
+    var fechaAyuda = document.createElement('div');
+    fechaAyuda.className = 'ayuda';
+    fechaCaja.appendChild(fechaLabel);
+    fechaCaja.appendChild(fecha);
+    fechaCaja.appendChild(fechaAyuda);
+    cuerpo.appendChild(fechaCaja);
+
+    var banner = document.createElement('div');
+    banner.className = 'banner-borrador';
+    banner.style.display = 'none';
+    var bannerTxt = document.createElement('span');
+    var descartar = document.createElement('button');
+    descartar.type = 'button';
+    descartar.textContent = 'Descartar';
+    banner.appendChild(bannerTxt);
+    banner.appendChild(descartar);
+    cuerpo.appendChild(banner);
+
+    var barra = document.createElement('div');
+    barra.className = 'barra-salsas';
+    var buscar = document.createElement('input');
+    buscar.type = 'text';
+    buscar.placeholder = 'Buscar fruta o verdura';
+    var contador = document.createElement('div');
+    contador.className = 'contador-salsas';
+    barra.appendChild(buscar);
+    barra.appendChild(contador);
+    cuerpo.appendChild(barra);
+
+    var favoritos = items.filter(function (item) { return item && item.f; });
+    var otros = items.filter(function (item) { return item && !item.f; });
+    var filas = [];
+
+    var hFav = null;
+    if (favoritos.length) {
+      hFav = document.createElement('h2');
+      hFav.className = 'seccion-mermas';
+      hFav.textContent = 'Más registrados';
+      cuerpo.appendChild(hFav);
+      favoritos.forEach(function (item) { filas.push(filaMerma(item, tope)); });
+    }
+
+    var hTodos = document.createElement('h2');
+    hTodos.className = 'seccion-mermas';
+    hTodos.textContent = 'Todos';
+    cuerpo.appendChild(hTodos);
+    otros.forEach(function (item) { filas.push(filaMerma(item, tope)); });
+
+    var porClave = {};
+    filas.forEach(function (f) { porClave[f.k] = f; });
+
+    var orden = [buscar, fecha];
+    filas.forEach(function (f) {
+      orden.push(f.l);
+      orden.push(f.x);
+      f.l.addEventListener('input', cambioConBorrador);
+      f.x.addEventListener('input', cambioConBorrador);
+    });
+    fecha.addEventListener('input', cambioConBorrador);
+
+    orden.forEach(function (input) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          var visibles = orden.filter(function (i) {
+            return i === buscar || i === fecha || !i._row || i._row.style.display !== 'none';
+          });
+          var idx = visibles.indexOf(input);
+          if (visibles[idx + 1]) visibles[idx + 1].focus();
+          else input.blur();
+        }
+      });
+    });
+
+    buscar.addEventListener('input', function () {
+      var q = normalizarBusqueda(buscar.value);
+      filas.forEach(function (f) {
+        f.row.style.display = f.buscar.indexOf(q) >= 0 ? '' : 'none';
+      });
+      actualizarSeccionesMermas(hFav, hTodos, favoritos.length, filas);
+    });
+
+    descartar.addEventListener('click', function () {
+      borrarBorradorMermas();
+      filas.forEach(function (f) { f.l.value = ''; f.x.value = ''; });
+      fecha.value = hoy;
+      banner.style.display = 'none';
+      revisar();
+    });
+
+    tg.MainButton.onClick(function () {
+      // El guardado con retraso podría reescribir el borrador DESPUÉS de borrarlo.
+      if (timerBorradorMermas) clearTimeout(timerBorradorMermas);
+      borrarBorradorMermas();
+      enviar({
+        f: datos.f || 'prod-fruver',
+        tipo: 'mermas',
+        v: datos.v,
+        d: fecha.value,
+        i: filas.filter(function (f) { return num(f.l) > 0 || num(f.x) > 0; })
+                .map(function (f) {
+                  var out = { k: f.k };
+                  if (num(f.l) > 0) out.l = num(f.l);
+                  if (num(f.x) > 0) out.x = num(f.x);
+                  return out;
+                })
+      });
+    });
+
+    restaurarBorradorMermas(porClave, fecha, hoy, banner, bannerTxt);
+    actualizarSeccionesMermas(hFav, hTodos, favoritos.length, filas);
+    revisar();
+
+    function cambioConBorrador() {
+      revisar();
+      programarBorradorMermas(filas, fecha);
+    }
+
+    function revisar() {
+      var cargadas = 0;
+      filas.forEach(function (f) {
+        var l = num(f.l), x = num(f.x);
+        if (l > 0) cargadas++;
+        if (x > 0) cargadas++;
+        pintarAvisoCasillaMermas(f.l, f.avisoL, tope);
+        pintarAvisoCasillaMermas(f.x, f.avisoX, tope);
+      });
+
+      contador.textContent = cargadas + ' merma' + (cargadas === 1 ? '' : 's') + ' cargada' + (cargadas === 1 ? '' : 's');
+
+      var estadoFecha = estadoFechaMermas(fecha.value, hoy, min);
+      fechaCaja.classList.toggle('alerta', estadoFecha.valida && hoy && fecha.value !== hoy);
+      fechaAyuda.textContent = estadoFecha.texto;
+
+      if (!estadoFecha.valida) {
+        tg.MainButton.hide();
+        aviso.style.display = 'block';
+        aviso.textContent = 'Elegí la fecha';
+      } else if (!cargadas) {
+        tg.MainButton.hide();
+        aviso.style.display = 'none';
+      } else {
+        aviso.style.display = 'none';
+        tg.MainButton.setText((datos.btn || 'Registrar mermas') + ' del ' + fechaCortaMermas(fecha.value));
+        tg.MainButton.show();
+      }
+    }
+  }
+
+  function filaMerma(item, tope) {
+    var row = document.createElement('div');
+    row.className = 'row row-merma';
+
+    var info = document.createElement('div');
+    info.className = 'info';
+    var n = document.createElement('div');
+    n.className = 'nombre';
+    n.textContent = item.n;
+    var s = document.createElement('div');
+    s.className = 'sku';
+    s.textContent = item.k;
+    info.appendChild(n);
+    info.appendChild(s);
+
+    var par = document.createElement('div');
+    par.className = 'par';
+    var l = campoRotulado(par, 'Limpieza');
+    var avisoL = avisoCasillaMerma(l);
+    var x = campoRotulado(par, 'Daño');
+    var avisoX = avisoCasillaMerma(x);
+
+    row.appendChild(info);
+    row.appendChild(par);
+    cuerpo.appendChild(row);
+
+    l._row = row;
+    x._row = row;
+    return {
+      k: item.k,
+      row: row,
+      l: l,
+      x: x,
+      avisoL: avisoL,
+      avisoX: avisoX,
+      grupo: item.f ? 'fav' : 'todos',
+      buscar: normalizarBusqueda(item.n + ' ' + item.k)
+    };
+  }
+
+  function avisoCasillaMerma(input) {
+    var a = document.createElement('div');
+    a.className = 'aviso-casilla';
+    input.parentNode.appendChild(a);
+    return a;
+  }
+
+  function pintarAvisoCasillaMermas(input, avisoCampo, tope) {
+    var v = num(input);
+    var pasa = v > tope;
+    input.parentNode.classList.toggle('alerta', pasa);
+    avisoCampo.textContent = pasa ? '⚠️ pasa de ' + miles(tope) + ' g' : '';
+  }
+
+  function actualizarSeccionesMermas(hFav, hTodos, tieneFav, filas) {
+    var favVisible = false, todosVisible = false;
+    filas.forEach(function (f) {
+      if (f.row.style.display === 'none') return;
+      if (f.grupo === 'fav') favVisible = true;
+      else todosVisible = true;
+    });
+    if (hFav) hFav.classList.toggle('oculta', !favVisible);
+    hTodos.classList.toggle('oculta', !todosVisible || (!tieneFav && !filas.length));
+  }
+
+  var DIAS_MERMAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+  var MESES_MERMAS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+
+  function fechaIsoValidaMermas(s) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(s || ''))) return false;
+    var p = s.split('-');
+    var d = new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2])));
+    return d.getUTCFullYear() === Number(p[0]) &&
+      d.getUTCMonth() === Number(p[1]) - 1 &&
+      d.getUTCDate() === Number(p[2]);
+  }
+
+  function fechaUtcMermas(s) {
+    var p = s.split('-');
+    return new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2])));
+  }
+
+  function isoDesdeUtcMermas(d) {
+    var y = d.getUTCFullYear();
+    var m = String(d.getUTCMonth() + 1);
+    var dia = String(d.getUTCDate());
+    if (m.length < 2) m = '0' + m;
+    if (dia.length < 2) dia = '0' + dia;
+    return y + '-' + m + '-' + dia;
+  }
+
+  function moverFechaMermas(s, dias) {
+    var d = fechaUtcMermas(s);
+    d.setUTCDate(d.getUTCDate() + dias);
+    return isoDesdeUtcMermas(d);
+  }
+
+  function fechaCortaMermas(s) {
+    if (!fechaIsoValidaMermas(s)) return '';
+    var d = fechaUtcMermas(s);
+    return d.getUTCDate() + '-' + MESES_MERMAS[d.getUTCMonth()];
+  }
+
+  function estadoFechaMermas(s, hoy, min) {
+    if (!fechaIsoValidaMermas(s) || (hoy && s > hoy) || (min && s < min)) {
+      return { valida: false, texto: 'Elegí la fecha' };
+    }
+    var d = fechaUtcMermas(s);
+    var offsetLunes = (d.getUTCDay() + 6) % 7;
+    var lunes = fechaUtcMermas(s);
+    lunes.setUTCDate(lunes.getUTCDate() - offsetLunes);
+    var texto = DIAS_MERMAS[d.getUTCDay()] + ' ' + fechaCortaMermas(s) +
+      ' · semana del lunes ' + fechaCortaMermas(isoDesdeUtcMermas(lunes));
+    if (hoy && s !== hoy) texto += ' · ⚠️ No es hoy: estás registrando mermas de ' + fechaCortaMermas(s);
+    return { valida: true, texto: texto };
+  }
+
+  var timerBorradorMermas = null;
+
+  function programarBorradorMermas(filas, fecha) {
+    try {
+      if (timerBorradorMermas) clearTimeout(timerBorradorMermas);
+      timerBorradorMermas = setTimeout(function () {
+        guardarBorradorMermas(filas, fecha);
+      }, 400);
+    } catch (e) {}
+  }
+
+  function guardarBorradorMermas(filas, fecha) {
+    try {
+      if (!window.localStorage) return;
+      var vals = {};
+      filas.forEach(function (f) {
+        var l = f.l.value.trim();
+        var x = f.x.value.trim();
+        if (l !== '' || x !== '') {
+          vals[f.k] = {};
+          if (l !== '') vals[f.k].l = num(f.l);
+          if (x !== '') vals[f.k].x = num(f.x);
+        }
+      });
+      window.localStorage.setItem(CLAVE_BORRADOR_MERMAS, JSON.stringify({
+        v: datos.v,
+        ts: Date.now(),
+        d: fecha.value,
+        vals: vals
+      }));
+    } catch (e) {}
+  }
+
+  function leerBorradorMermas() {
+    try {
+      if (!window.localStorage) return null;
+      var crudo = window.localStorage.getItem(CLAVE_BORRADOR_MERMAS);
+      return crudo ? JSON.parse(crudo) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function borrarBorradorMermas() {
+    try {
+      if (window.localStorage) window.localStorage.removeItem(CLAVE_BORRADOR_MERMAS);
+    } catch (e) {}
+  }
+
+  function restaurarBorradorMermas(porClave, fecha, hoy, banner, bannerTxt) {
+    var b = leerBorradorMermas();
+    if (!b) return;
+    if (b.v !== datos.v || !(b.ts > 0) || Date.now() - b.ts > HORAS_BORRADOR_MERMAS * 60 * 60 * 1000) {
+      borrarBorradorMermas();
+      return;
+    }
+    // Un borrador sin ningún valor (escribieron y borraron) no merece banner.
+    if (!Object.keys(b.vals || {}).length) {
+      borrarBorradorMermas();
+      return;
+    }
+    if (fechaIsoValidaMermas(b.d) && (!hoy || b.d <= hoy)) fecha.value = b.d;
+    Object.keys(b.vals || {}).forEach(function (k) {
+      var f = porClave[k], v = b.vals[k] || {};
+      if (!f) return;
+      if (v.l !== undefined && v.l !== null && v.l !== '') f.l.value = miles(v.l);
+      if (v.x !== undefined && v.x !== null && v.x !== '') f.x.value = miles(v.x);
+    });
+    bannerTxt.textContent = 'Recuperé lo que habías escrito (guardado hace ' + haceMermas(b.ts) + ').';
+    banner.style.display = 'block';
+  }
+
+  function haceMermas(ts) {
+    var mins = Math.max(1, Math.round((Date.now() - ts) / 60000));
+    if (mins < 60) return mins + ' min';
+    var horas = Math.round(mins / 60);
+    return horas + ' h';
+  }
+
   /* -------------------------------------------------------------- proteína */
   // Menú 2. No todas las proteínas se trabajan igual (Alicia, 2-ago-2026), así
   // que hay tres perfiles y cada uno pide solo lo que de verdad se mide. Pedir
@@ -1270,6 +1699,7 @@
 
   if (tipo === 'proteina') modoProteina();
   else if (tipo === 'salsas') modoSalsas();
+  else if (tipo === 'mermas') modoMermas();
   else if (tipo === 'receta') modoReceta();
   else if (tipo === 'fruver') modoFruver();
   else modoConteo();

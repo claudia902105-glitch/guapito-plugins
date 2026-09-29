@@ -235,10 +235,47 @@
     document.querySelector('header').appendChild(banda);
   }
 
-  // Abierto como link suelto (no desde el botón azul del mensaje) el botón de
-  // enviar de la mini-app NO existe y el envío es imposible. Avisarlo de una,
-  // antes de que alguien llene 25 casillas para nada.
-  if (!tg.initData) {
+  // Recordatorio del periodo (30-sep-2026, pedido de Claudia): todo lo que se
+  // registra cae en una semana lunes-domingo, y hay que verla antes de escribir.
+  // Autocontenido a propósito: corre antes de que se inicialicen las tablas de
+  // nombres del modo mermas (var, no hoisted). "Hoy" lo pone el bot (`hoy`);
+  // si no, se toma la fecha de Bogotá, no la del teléfono. Mermas tiene su
+  // propia tarjeta de fecha (se puede cambiar), así que ahí no se duplica.
+  function bannerSemana() {
+    var dias = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
+    var nomDias = ['domingo', 'lunes', 'martes', 'miércoles', 'jueves', 'viernes', 'sábado'];
+    var meses = ['ene', 'feb', 'mar', 'abr', 'may', 'jun', 'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
+    var hoy = /^\d{4}-\d{2}-\d{2}$/.test(String(datos.hoy || '')) ? datos.hoy : null;
+    if (!hoy) {
+      try {
+        hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Bogota' });
+      } catch (e) { return; }
+    }
+    var p = hoy.split('-');
+    var d = new Date(Date.UTC(Number(p[0]), Number(p[1]) - 1, Number(p[2])));
+    if (isNaN(d.getTime())) return;
+    var lunes = new Date(d.getTime());
+    lunes.setUTCDate(lunes.getUTCDate() - ((d.getUTCDay() + 6) % 7));
+    var domingo = new Date(lunes.getTime());
+    domingo.setUTCDate(domingo.getUTCDate() + 6);
+    function corta(x) { return x.getUTCDate() + '-' + meses[x.getUTCMonth()]; }
+    var b = document.createElement('div');
+    b.className = 'banda-unidad banda-semana';
+    b.textContent = '📅 Registro de la semana del lunes ' + corta(lunes) +
+      ' al domingo ' + corta(domingo) + ' · hoy es ' + nomDias[d.getUTCDay()] + ' ' + corta(d);
+    document.querySelector('header').appendChild(b);
+  }
+  if (datos.tipo !== 'mermas') bannerSemana();
+
+  // Abierto como link suelto el botón de enviar NO existe y el envío es
+  // imposible; avisarlo antes de que alguien llene 25 casillas para nada. Solo
+  // cuando de verdad aplica: los formularios que abre el botón del teclado
+  // llegan SIN initData (Telegram no se lo pasa), así que `!initData` avisaba
+  // siempre. Fuera de Telegram la plataforma es 'unknown'; y un link/botón
+  // inline trae query_id, y por ahí sendData tampoco funciona.
+  var unsafe = tg.initDataUnsafe || {};
+  var comoLink = !tg.platform || tg.platform === 'unknown' || !!unsafe.query_id;
+  if (comoLink) {
     var fuera = document.createElement('div');
     fuera.style.cssText = 'margin:12px;padding:12px;border-radius:10px;' +
       'background:#e0a800;color:#000;font-size:14px;text-align:center;';
@@ -1142,8 +1179,10 @@
     var offsetLunes = (d.getUTCDay() + 6) % 7;
     var lunes = fechaUtcMermas(s);
     lunes.setUTCDate(lunes.getUTCDate() - offsetLunes);
+    var domingo = moverFechaMermas(isoDesdeUtcMermas(lunes), 6);
     var texto = DIAS_MERMAS[d.getUTCDay()] + ' ' + fechaCortaMermas(s) +
-      ' · semana del lunes ' + fechaCortaMermas(isoDesdeUtcMermas(lunes));
+      ' · semana del lunes ' + fechaCortaMermas(isoDesdeUtcMermas(lunes)) +
+      ' al domingo ' + fechaCortaMermas(domingo);
     if (hoy && s !== hoy) texto += ' · ⚠️ No es hoy: estás registrando mermas de ' + fechaCortaMermas(s);
     return { valida: true, texto: texto };
   }

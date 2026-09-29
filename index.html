@@ -114,6 +114,43 @@
   .row-merma { align-items: flex-start; }
   .row-merma .par { flex: none; }
   .row-merma .par input { width: 76px; }
+  .lineas-mermas { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .linea-merma {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 8px; align-items: start;
+    padding: 10px; background: var(--sec); border-radius: 10px;
+  }
+  .linea-merma .par { flex: none; }
+  .linea-merma .par input { width: 76px; }
+  .busca-item { position: relative; min-width: 0; }
+  .busca-item input {
+    width: 100%; text-align: left; font-weight: 600;
+  }
+  .busca-item .sku { margin-top: 2px; }
+  .busca-item .error-linea { min-height: 16px; margin-top: 2px; color: #d33; font-size: 12px; }
+  .sugerencias-merma {
+    position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 3;
+    background: var(--bg); border: 1px solid rgba(128,128,128,.35);
+    border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+    overflow: hidden;
+  }
+  .sugerencia-merma {
+    min-height: 44px; width: 100%; padding: 7px 10px;
+    border: 0; border-bottom: 1px solid rgba(128,128,128,.18);
+    background: var(--bg); color: var(--fg); text-align: left;
+  }
+  .sugerencia-merma:last-child { border-bottom: 0; }
+  .sugerencia-merma .nombre { white-space: normal; }
+  .quitar-merma {
+    width: 38px; height: 38px; border: 0; border-radius: 8px;
+    background: rgba(128,128,128,.16); color: var(--fg);
+    font-size: 22px; line-height: 1; font-weight: 600;
+  }
+  .agregar-merma {
+    width: 100%; min-height: 46px; margin-bottom: 10px;
+    border: 0; border-radius: 10px; background: var(--link); color: #fff;
+    font-size: 16px; font-weight: 700;
+  }
   .par label.alerta input { border-color: #d64545; outline: 2px solid #d64545; }
   .aviso-casilla { min-height: 14px; font-size: 10px; color: #d33; text-align: center; }
   .error-catalogo {
@@ -909,6 +946,19 @@
     var tope = datos.tope > 0 ? datos.tope : TOPE_MERMA;
     var hoy = fechaIsoValidaMermas(datos.hoy) ? datos.hoy : '';
     var min = hoy ? moverFechaMermas(hoy, -14) : '';
+    var catalogo = items.filter(function (item) { return item && item.k && item.n; })
+      .map(function (item, idx) {
+        return {
+          k: item.k,
+          n: item.n,
+          f: item.f ? 1 : 0,
+          orden: idx,
+          buscar: normalizarBusqueda(item.n + ' ' + item.k)
+        };
+      });
+    var porClave = {};
+    catalogo.forEach(function (item) { porClave[item.k] = item; });
+    var lineas = [];
 
     var fechaCaja = document.createElement('div');
     fechaCaja.className = 'fecha-mermas';
@@ -937,75 +987,38 @@
     banner.appendChild(descartar);
     cuerpo.appendChild(banner);
 
-    var barra = document.createElement('div');
-    barra.className = 'barra-salsas';
-    var buscar = document.createElement('input');
-    buscar.type = 'text';
-    buscar.placeholder = 'Buscar fruta o verdura';
     var contador = document.createElement('div');
-    contador.className = 'contador-salsas';
-    barra.appendChild(buscar);
-    barra.appendChild(contador);
-    cuerpo.appendChild(barra);
+    contador.className = 'calc';
+    cuerpo.appendChild(contador);
 
-    var favoritos = items.filter(function (item) { return item && item.f; });
-    var otros = items.filter(function (item) { return item && !item.f; });
-    var filas = [];
+    var lista = document.createElement('div');
+    lista.className = 'lineas-mermas';
+    cuerpo.appendChild(lista);
 
-    var hFav = null;
-    if (favoritos.length) {
-      hFav = document.createElement('h2');
-      hFav.className = 'seccion-mermas';
-      hFav.textContent = 'Más registrados';
-      cuerpo.appendChild(hFav);
-      favoritos.forEach(function (item) { filas.push(filaMerma(item, tope)); });
-    }
+    var agregar = document.createElement('button');
+    agregar.type = 'button';
+    agregar.className = 'agregar-merma';
+    agregar.textContent = '+ Agregar otra merma';
+    cuerpo.appendChild(agregar);
 
-    var hTodos = document.createElement('h2');
-    hTodos.className = 'seccion-mermas';
-    hTodos.textContent = 'Todos';
-    cuerpo.appendChild(hTodos);
-    otros.forEach(function (item) { filas.push(filaMerma(item, tope)); });
-
-    var porClave = {};
-    filas.forEach(function (f) { porClave[f.k] = f; });
-
-    var orden = [buscar, fecha];
-    filas.forEach(function (f) {
-      orden.push(f.l);
-      orden.push(f.x);
-      f.l.addEventListener('input', cambioConBorrador);
-      f.x.addEventListener('input', cambioConBorrador);
-    });
     fecha.addEventListener('input', cambioConBorrador);
 
-    orden.forEach(function (input) {
-      input.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          var visibles = orden.filter(function (i) {
-            return i === buscar || i === fecha || !i._row || i._row.style.display !== 'none';
-          });
-          var idx = visibles.indexOf(input);
-          if (visibles[idx + 1]) visibles[idx + 1].focus();
-          else input.blur();
-        }
-      });
-    });
-
-    buscar.addEventListener('input', function () {
-      var q = normalizarBusqueda(buscar.value);
-      filas.forEach(function (f) {
-        f.row.style.display = f.buscar.indexOf(q) >= 0 ? '' : 'none';
-      });
-      actualizarSeccionesMermas(hFav, hTodos, favoritos.length, filas);
+    agregar.addEventListener('click', function () {
+      var nueva = agregarLineaMerma();
+      if (nueva) nueva.itemInput.focus();
     });
 
     descartar.addEventListener('click', function () {
       borrarBorradorMermas();
-      filas.forEach(function (f) { f.l.value = ''; f.x.value = ''; });
+      lineas.forEach(function (linea) {
+        if (linea.row.parentNode && linea.row.parentNode.removeChild) {
+          linea.row.parentNode.removeChild(linea.row);
+        }
+      });
+      lineas = [];
       fecha.value = hoy;
       banner.style.display = 'none';
+      asegurarLineasIniciales();
       revisar();
     });
 
@@ -1018,33 +1031,101 @@
         tipo: 'mermas',
         v: datos.v,
         d: fecha.value,
-        i: filas.filter(function (f) { return num(f.l) > 0 || num(f.x) > 0; })
-                .map(function (f) {
-                  var out = { k: f.k };
-                  if (num(f.l) > 0) out.l = num(f.l);
-                  if (num(f.x) > 0) out.x = num(f.x);
-                  return out;
-                })
+        i: payloadMermas()
       });
     });
 
-    restaurarBorradorMermas(porClave, fecha, hoy, banner, bannerTxt);
-    actualizarSeccionesMermas(hFav, hTodos, favoritos.length, filas);
+    if (!restaurarBorradorMermas(porClave, fecha, hoy, banner, bannerTxt, function (item, vals) {
+      agregarLineaMerma(item, vals);
+    })) {
+      asegurarLineasIniciales();
+    }
+    asegurarLineaFinalVacia();
     revisar();
+    if (lineas[0]) lineas[0].itemInput.focus();
 
     function cambioConBorrador() {
       revisar();
-      programarBorradorMermas(filas, fecha);
+      programarBorradorMermas(lineas, fecha);
+    }
+
+    function asegurarLineasIniciales() {
+      while (lineas.length < 3) agregarLineaMerma();
+    }
+
+    function asegurarLineaFinalVacia() {
+      if (lineas.length && lineas[lineas.length - 1].item && lineas.length < 30) agregarLineaMerma();
+      if (lineas.length < 3) asegurarLineasIniciales();
+    }
+
+    function agregarLineaMerma(item, vals) {
+      if (lineas.length >= 30) return null;
+      var linea = crearLineaMerma(catalogo, tope, cambioConBorrador, function (l) {
+        quitarLineaMerma(l);
+      }, function (l) {
+        if (l === lineas[lineas.length - 1] && lineas.length < 30) {
+          agregarLineaMerma();
+        }
+        cambioConBorrador();
+      }, seleccionadasEnOtras);
+      lineas.push(linea);
+      lista.appendChild(linea.row);
+      if (item) elegirItemLineaMerma(linea, item);
+      if (vals) {
+        if (vals.l !== undefined && vals.l !== null && vals.l !== '') linea.l.value = miles(vals.l);
+        if (vals.x !== undefined && vals.x !== null && vals.x !== '') linea.x.value = miles(vals.x);
+      }
+      revisar();
+      return linea;
+    }
+
+    function quitarLineaMerma(linea, sinBorrador) {
+      var idx = lineas.indexOf(linea);
+      if (idx >= 0) lineas.splice(idx, 1);
+      if (linea.row.parentNode && linea.row.parentNode.removeChild) {
+        linea.row.parentNode.removeChild(linea.row);
+      } else if (linea.row.parentNode) {
+        linea.row.parentNode.children = linea.row.parentNode.children.filter(function (c) { return c !== linea.row; });
+      }
+      asegurarLineasIniciales();
+      revisar();
+      if (!sinBorrador) programarBorradorMermas(lineas, fecha);
+    }
+
+    function seleccionadasEnOtras(linea) {
+      var usadas = {};
+      lineas.forEach(function (l) {
+        if (l !== linea && l.item) usadas[l.item.k] = true;
+      });
+      return usadas;
+    }
+
+    function payloadMermas() {
+      var porItem = {}, orden = [];
+      lineas.forEach(function (l) {
+        if (!l.item) return;
+        var limpieza = num(l.l), dano = num(l.x);
+        if (!(limpieza > 0) && !(dano > 0)) return;
+        if (!porItem[l.item.k]) {
+          porItem[l.item.k] = { k: l.item.k };
+          orden.push(l.item.k);
+        }
+        if (limpieza > 0) porItem[l.item.k].l = (porItem[l.item.k].l || 0) + limpieza;
+        if (dano > 0) porItem[l.item.k].x = (porItem[l.item.k].x || 0) + dano;
+      });
+      return orden.map(function (k) { return porItem[k]; });
     }
 
     function revisar() {
       var cargadas = 0;
-      filas.forEach(function (f) {
+      lineas.forEach(function (f) {
+        validarTextoLineaMerma(f);
         var l = num(f.l), x = num(f.x);
         if (l > 0) cargadas++;
         if (x > 0) cargadas++;
         pintarAvisoCasillaMermas(f.l, f.avisoL, tope);
         pintarAvisoCasillaMermas(f.x, f.avisoX, tope);
+        pintarRepetidaMerma(f, lineas);
       });
 
       contador.textContent = cargadas + ' merma' + (cargadas === 1 ? '' : 's') + ' cargada' + (cargadas === 1 ? '' : 's');
@@ -1057,7 +1138,7 @@
         tg.MainButton.hide();
         aviso.style.display = 'block';
         aviso.textContent = 'Elegí la fecha';
-      } else if (!cargadas) {
+      } else if (!payloadMermas().length) {
         tg.MainButton.hide();
         aviso.style.display = 'none';
       } else {
@@ -1068,20 +1149,27 @@
     }
   }
 
-  function filaMerma(item, tope) {
+  function crearLineaMerma(catalogo, tope, cambio, quitar, elegida, seleccionadasEnOtras) {
     var row = document.createElement('div');
-    row.className = 'row row-merma';
+    row.className = 'linea-merma';
 
-    var info = document.createElement('div');
-    info.className = 'info';
-    var n = document.createElement('div');
-    n.className = 'nombre';
-    n.textContent = item.n;
-    var s = document.createElement('div');
-    s.className = 'sku';
-    s.textContent = item.k;
-    info.appendChild(n);
-    info.appendChild(s);
+    var busca = document.createElement('div');
+    busca.className = 'busca-item';
+    var itemInput = document.createElement('input');
+    itemInput.type = 'text';
+    itemInput.placeholder = 'Ítem';
+    itemInput.autocomplete = 'off';
+    var sku = document.createElement('div');
+    sku.className = 'sku';
+    var error = document.createElement('div');
+    error.className = 'error-linea';
+    var sugerencias = document.createElement('div');
+    sugerencias.className = 'sugerencias-merma';
+    sugerencias.style.display = 'none';
+    busca.appendChild(itemInput);
+    busca.appendChild(sku);
+    busca.appendChild(error);
+    busca.appendChild(sugerencias);
 
     var par = document.createElement('div');
     par.className = 'par';
@@ -1090,22 +1178,128 @@
     var x = campoRotulado(par, 'Daño');
     var avisoX = avisoCasillaMerma(x);
 
-    row.appendChild(info);
+    var borrar = document.createElement('button');
+    borrar.type = 'button';
+    borrar.className = 'quitar-merma';
+    borrar.textContent = '×';
+
+    row.appendChild(busca);
     row.appendChild(par);
-    cuerpo.appendChild(row);
+    row.appendChild(borrar);
 
     l._row = row;
     x._row = row;
-    return {
-      k: item.k,
+    l.disabled = true;
+    x.disabled = true;
+
+    var linea = {
       row: row,
+      itemInput: itemInput,
+      sku: sku,
+      error: error,
+      sugerencias: sugerencias,
       l: l,
       x: x,
       avisoL: avisoL,
       avisoX: avisoX,
-      grupo: item.f ? 'fav' : 'todos',
-      buscar: normalizarBusqueda(item.n + ' ' + item.k)
+      item: null
     };
+
+    itemInput.addEventListener('input', function () {
+      if (!linea.item || itemInput.value !== linea.item.n) {
+        linea.item = null;
+        sku.textContent = '';
+        l.disabled = true;
+        x.disabled = true;
+      }
+      mostrarSugerenciasMerma(linea, catalogo, seleccionadasEnOtras(linea), elegida);
+      cambio();
+    });
+    itemInput.addEventListener('focus', function () {
+      mostrarSugerenciasMerma(linea, catalogo, seleccionadasEnOtras(linea), elegida);
+    });
+    itemInput.addEventListener('blur', function () {
+      setTimeout(function () { sugerencias.style.display = 'none'; }, 120);
+      cambio();
+    });
+    [l, x].forEach(function (input) { input.addEventListener('input', cambio); });
+    borrar.addEventListener('click', function () { quitar(linea); });
+
+    return linea;
+  }
+
+  function mostrarSugerenciasMerma(linea, catalogo, usadas, elegida) {
+    var q = normalizarBusqueda(linea.itemInput.value);
+    linea.sugerencias.innerHTML = '';
+    if (!q) {
+      linea.sugerencias.style.display = 'none';
+      return;
+    }
+    var partes = q.split(/\s+/).filter(Boolean);
+    var opciones = catalogo.filter(function (item) {
+      if (usadas[item.k]) return false;
+      return partes.every(function (p) {
+        return item.buscar.split(/\s+/).some(function (palabra) { return palabra.indexOf(p) >= 0; });
+      });
+    }).sort(function (a, b) {
+      if (a.f !== b.f) return b.f - a.f;
+      return a.orden - b.orden;
+    }).slice(0, 6);
+
+    opciones.forEach(function (item) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sugerencia-merma';
+      var n = document.createElement('div');
+      n.className = 'nombre';
+      n.textContent = item.n;
+      var s = document.createElement('div');
+      s.className = 'sku';
+      s.textContent = item.k;
+      btn.appendChild(n);
+      btn.appendChild(s);
+      // Se elige en `click`, no en `touchstart`: con touchstart, rozar la lista
+      // para hacer scroll elegía un ítem sin querer. El `mousedown` (que el
+      // celular emula antes del click) solo evita que el campo pierda el foco y
+      // cierre la lista antes del toque.
+      btn.addEventListener('mousedown', function (e) { e.preventDefault(); });
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        elegirItemLineaMerma(linea, item);
+        linea.sugerencias.style.display = 'none';
+        elegida(linea);
+        // Sigue escribiendo la cantidad sin tener que tocar otra vez.
+        if (linea.l && linea.l.focus) linea.l.focus();
+      });
+      linea.sugerencias.appendChild(btn);
+    });
+    linea.sugerencias.style.display = opciones.length ? 'block' : 'none';
+  }
+
+  function elegirItemLineaMerma(linea, item) {
+    linea.item = item;
+    linea.itemInput.value = item.n;
+    linea.sku.textContent = item.k;
+    linea.error.textContent = '';
+    linea.l.disabled = false;
+    linea.x.disabled = false;
+  }
+
+  function validarTextoLineaMerma(linea) {
+    if (!linea.itemInput.value.trim() || linea.item) {
+      if (!linea.item) linea.error.textContent = '';
+      return;
+    }
+    linea.error.textContent = 'Elegí un ítem de la lista';
+  }
+
+  function pintarRepetidaMerma(linea, lineas) {
+    if (!linea.item) return;
+    var repetida = false;
+    for (var i = 0; i < lineas.indexOf(linea); i++) {
+      if (lineas[i].item && lineas[i].item.k === linea.item.k) repetida = true;
+    }
+    linea.error.textContent = repetida ? '⚠️ Ya lo cargaste arriba' : '';
   }
 
   function avisoCasillaMerma(input) {
@@ -1120,17 +1314,6 @@
     var pasa = v > tope;
     input.parentNode.classList.toggle('alerta', pasa);
     avisoCampo.textContent = pasa ? '⚠️ pasa de ' + miles(tope) + ' g' : '';
-  }
-
-  function actualizarSeccionesMermas(hFav, hTodos, tieneFav, filas) {
-    var favVisible = false, todosVisible = false;
-    filas.forEach(function (f) {
-      if (f.row.style.display === 'none') return;
-      if (f.grupo === 'fav') favVisible = true;
-      else todosVisible = true;
-    });
-    if (hFav) hFav.classList.toggle('oculta', !favVisible);
-    hTodos.classList.toggle('oculta', !todosVisible || (!tieneFav && !filas.length));
   }
 
   var DIAS_MERMAS = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -1189,33 +1372,35 @@
 
   var timerBorradorMermas = null;
 
-  function programarBorradorMermas(filas, fecha) {
+  function programarBorradorMermas(lineas, fecha) {
     try {
       if (timerBorradorMermas) clearTimeout(timerBorradorMermas);
       timerBorradorMermas = setTimeout(function () {
-        guardarBorradorMermas(filas, fecha);
+        guardarBorradorMermas(lineas, fecha);
       }, 400);
     } catch (e) {}
   }
 
-  function guardarBorradorMermas(filas, fecha) {
+  function guardarBorradorMermas(lineas, fecha) {
     try {
       if (!window.localStorage) return;
-      var vals = {};
-      filas.forEach(function (f) {
-        var l = f.l.value.trim();
-        var x = f.x.value.trim();
+      var guardadas = [];
+      lineas.forEach(function (linea) {
+        if (!linea.item) return;
+        var l = linea.l.value.trim();
+        var x = linea.x.value.trim();
         if (l !== '' || x !== '') {
-          vals[f.k] = {};
-          if (l !== '') vals[f.k].l = num(f.l);
-          if (x !== '') vals[f.k].x = num(f.x);
+          var out = { k: linea.item.k };
+          if (l !== '') out.l = num(linea.l);
+          if (x !== '') out.x = num(linea.x);
+          guardadas.push(out);
         }
       });
       window.localStorage.setItem(CLAVE_BORRADOR_MERMAS, JSON.stringify({
         v: datos.v,
         ts: Date.now(),
         d: fecha.value,
-        vals: vals
+        lineas: guardadas
       }));
     } catch (e) {}
   }
@@ -1236,27 +1421,27 @@
     } catch (e) {}
   }
 
-  function restaurarBorradorMermas(porClave, fecha, hoy, banner, bannerTxt) {
+  function restaurarBorradorMermas(porClave, fecha, hoy, banner, bannerTxt, agregarLinea) {
     var b = leerBorradorMermas();
-    if (!b) return;
+    if (!b) return false;
     if (b.v !== datos.v || !(b.ts > 0) || Date.now() - b.ts > HORAS_BORRADOR_MERMAS * 60 * 60 * 1000) {
       borrarBorradorMermas();
-      return;
+      return false;
     }
-    // Un borrador sin ningún valor (escribieron y borraron) no merece banner.
-    if (!Object.keys(b.vals || {}).length) {
-      borrarBorradorMermas();
-      return;
+    // `vals` era el formato de la lista vieja; ignorarlo evita resucitar una UI
+    // que ya no existe ni mostrar un banner mentiroso.
+    if (!Array.isArray(b.lineas) || b.vals) {
+      return false;
     }
+    var utiles = b.lineas.filter(function (linea) { return linea && porClave[linea.k]; });
+    if (!utiles.length) return false;
     if (fechaIsoValidaMermas(b.d) && (!hoy || b.d <= hoy)) fecha.value = b.d;
-    Object.keys(b.vals || {}).forEach(function (k) {
-      var f = porClave[k], v = b.vals[k] || {};
-      if (!f) return;
-      if (v.l !== undefined && v.l !== null && v.l !== '') f.l.value = miles(v.l);
-      if (v.x !== undefined && v.x !== null && v.x !== '') f.x.value = miles(v.x);
+    utiles.forEach(function (v) {
+      agregarLinea(porClave[v.k], v);
     });
     bannerTxt.textContent = 'Recuperé lo que habías escrito (guardado hace ' + haceMermas(b.ts) + ').';
     banner.style.display = 'block';
+    return true;
   }
 
   function haceMermas(ts) {

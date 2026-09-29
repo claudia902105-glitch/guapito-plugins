@@ -78,6 +78,22 @@
   .lim { font-size: 12px; margin-top: 2px; color: var(--hint); }
   .lim.bien { color: #2e9e4f; }
   .lim.mal  { color: #d33; font-weight: 600; }
+  .barra-salsas {
+    position: sticky; top: 0; z-index: 1;
+    display: flex; gap: 8px; align-items: center;
+    padding: 8px 0; margin-bottom: 8px;
+    background: var(--bg);
+  }
+  .barra-salsas input { flex: 1; width: auto; text-align: left; font-weight: 500; }
+  .contador-salsas {
+    flex: none; padding: 9px 10px; border-radius: 8px;
+    background: var(--sec); color: var(--fg);
+    font-size: 13px; font-weight: 600;
+  }
+  .error-catalogo {
+    padding: 12px; border-radius: 10px;
+    background: #fbe3e3; color: #b00020; font-size: 14px;
+  }
   /* Selector de motivo (Menú 5 · Fruver). Son dos opciones excluyentes y van
      como botones a la vista, no como lista desplegable: un <select> en
      Telegram abre la rueda nativa del sistema, que tapa media pantalla y
@@ -137,6 +153,9 @@
   //       (morrillo → caldo de birria): una casilla más, en gramos
   //   tipo "receta"   (Menú 1)     → {"t","s","u":"g","lim":{"est","min","max"}}
   //     una sola preparación, ya elegida en el chat: recetas + cantidad
+  //   tipo "salsas"   (Menú 1)     → {"f","t","s","u":"g","v","btn"}
+  //     todas las preparaciones del catálogo `catalogos/menu1.json?v=<v>`;
+  //     `v` debe coincidir con el bot o no se dibuja el formulario
   //   tipo "fruver"   (Menú 5)     → {"t","s","tope":500}
   //     una sola fruta o verdura: motivo + gramos de merma
   //
@@ -569,6 +588,214 @@
     label.appendChild(input);
     par.appendChild(label);
     return input;
+  }
+
+  /* ---------------------------------------------------------------- salsas */
+  // Menú 1 nuevo — todas las salsas, aceites y mayonesas en una sola carga.
+  // El catálogo no viaja en la URL porque Telegram corta cerca de 2.048
+  // caracteres. Por eso el bot manda solo la versión esperada y la página
+  // descarga el JSON publicado al lado; si la versión no coincide, no se manda
+  // nada. Un catálogo viejo es peor que un formulario roto: escribe SKUs que el
+  // cocinero no estaba viendo.
+  function modoSalsas() {
+    if (!datos.v) {
+      mostrarErrorCatalogo('El catálogo de la página no coincide con el del bot. Avisale a Claudia.');
+      return;
+    }
+
+    var unidad = datos.u || 'g';
+    var uCorta = UNIDADES[unidad] ? UNIDADES[unidad].corta : unidad;
+
+    var cargando = document.createElement('div');
+    cargando.className = 'calc';
+    cargando.textContent = 'Cargando preparaciones…';
+    cuerpo.appendChild(cargando);
+
+    fetch('catalogos/menu1.json?v=' + encodeURIComponent(datos.v))
+      .then(function (r) {
+        if (!r || r.ok === false) throw new Error('fetch');
+        return r.json();
+      })
+      .then(function (cat) {
+        cargando.style.display = 'none';
+        if (!cat || cat.v !== datos.v || !Array.isArray(cat.i)) {
+          mostrarErrorCatalogo('El catálogo de la página no coincide con el del bot. Avisale a Claudia.');
+          return;
+        }
+        dibujarSalsas(cat.i, unidad, uCorta);
+      })
+      .catch(function () {
+        cargando.style.display = 'none';
+        mostrarErrorCatalogo('No se pudo cargar el catálogo de preparaciones. Avisale a Claudia.');
+      });
+  }
+
+  function mostrarErrorCatalogo(texto) {
+    tg.MainButton.hide();
+    aviso.style.display = 'none';
+    var e = document.createElement('div');
+    e.className = 'error-catalogo';
+    e.textContent = texto;
+    cuerpo.appendChild(e);
+  }
+
+  function normalizarBusqueda(s) {
+    return String(s || '').toLowerCase()
+      .replace(/[áàäâ]/g, 'a')
+      .replace(/[éèëê]/g, 'e')
+      .replace(/[íìïî]/g, 'i')
+      .replace(/[óòöô]/g, 'o')
+      .replace(/[úùüû]/g, 'u')
+      .replace(/ñ/g, 'n');
+  }
+
+  function dibujarSalsas(items, unidad, uCorta) {
+    var barra = document.createElement('div');
+    barra.className = 'barra-salsas';
+    var buscar = document.createElement('input');
+    buscar.type = 'text';
+    buscar.placeholder = 'Buscar preparación';
+    var contador = document.createElement('div');
+    contador.className = 'contador-salsas';
+    barra.appendChild(buscar);
+    barra.appendChild(contador);
+    cuerpo.appendChild(barra);
+
+    var filas = items.map(function (item) {
+      return filaSalsa(item, unidad, uCorta);
+    });
+
+    var orden = [buscar];
+    filas.forEach(function (f) {
+      orden.push(f.rec);
+      orden.push(f.cant);
+      f.rec.addEventListener('input', revisar);
+      f.cant.addEventListener('input', revisar);
+    });
+    orden.forEach(function (input, idx) {
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          if (orden[idx + 1]) orden[idx + 1].focus();
+          else input.blur();
+        }
+      });
+    });
+
+    buscar.addEventListener('input', function () {
+      var q = normalizarBusqueda(buscar.value);
+      filas.forEach(function (f) {
+        f.row.style.display = f.buscar.indexOf(q) >= 0 ? '' : 'none';
+      });
+    });
+
+    tg.MainButton.onClick(function () {
+      enviar({
+        f: datos.f || 'prod-salsas',
+        tipo: 'salsas',
+        v: datos.v,
+        i: filas.filter(function (f) { return num(f.cant) > 0; })
+                .map(function (f) {
+                  return { k: f.k, r: num(f.rec), q: num(f.cant) };
+                })
+      });
+    });
+
+    revisar();
+
+    function revisar() {
+      var cargadas = 0;
+      var primeraSinReceta = null;
+
+      filas.forEach(function (f) {
+        var q = num(f.cant);
+        var r = num(f.rec);
+        var produjo = q > 0;
+        if (produjo) cargadas++;
+
+        f.rec.disabled = !produjo;
+        f.rec.style.opacity = produjo ? '' : '.35';
+        if (!produjo && f.rec.value !== '') f.rec.value = '';
+
+        f.row.classList.toggle('pendiente', produjo && !(r > 0));
+        if (produjo && !(r > 0) && !primeraSinReceta) primeraSinReceta = f.n;
+
+        f.rend.textContent = (produjo && r > 0)
+          ? '→ ' + redondear(q / r) + (uCorta ? ' ' + uCorta : '') + ' por receta'
+          : '';
+
+        if (f.lim) {
+          var v = veredictoLimite(f.tope, q, r, uCorta);
+          f.lim.className = 'lim' + (v ? (v.ok ? ' bien' : ' mal') : '');
+          f.lim.textContent = v ? v.txt : textoLimite(f.tope, uCorta);
+        }
+      });
+
+      contador.textContent = cargadas + ' preparacion' + (cargadas === 1 ? '' : 'es') + ' cargada' + (cargadas === 1 ? '' : 's');
+
+      if (!cargadas) {
+        tg.MainButton.hide();
+        aviso.style.display = 'none';
+      } else if (primeraSinReceta) {
+        tg.MainButton.hide();
+        aviso.style.display = 'block';
+        aviso.textContent = 'Falta el nº de recetas de ' + primeraSinReceta;
+      } else {
+        aviso.style.display = 'none';
+        tg.MainButton.setText(datos.btn || 'Registrar producción');
+        tg.MainButton.show();
+      }
+    }
+  }
+
+  function filaSalsa(item, unidad, uCorta) {
+    var row = document.createElement('div');
+    row.className = 'row';
+
+    var info = document.createElement('div');
+    info.className = 'info';
+    var n = document.createElement('div');
+    n.className = 'nombre';
+    n.textContent = item.n;
+    var s = document.createElement('div');
+    s.className = 'sku';
+    s.textContent = item.k;
+    var rend = document.createElement('div');
+    rend.className = 'rend';
+    info.appendChild(n);
+    info.appendChild(s);
+    info.appendChild(rend);
+
+    var lim = null;
+    if (item.lim && item.lim.est > 0) {
+      lim = document.createElement('div');
+      lim.className = 'lim';
+      lim.textContent = textoLimite(item.lim, uCorta);
+      info.appendChild(lim);
+    }
+
+    var par = document.createElement('div');
+    par.className = 'par';
+    var rec = campoRotulado(par, 'recetas');
+    var cant = campoRotulado(par, unidad || 'cantidad');
+
+    row.appendChild(info);
+    row.appendChild(par);
+    cuerpo.appendChild(row);
+
+    cant._row = row;
+    rec._row = row;
+    return {
+      k: item.k,
+      n: item.n,
+      row: row,
+      rec: rec,
+      cant: cant,
+      rend: rend,
+      lim: lim,
+      tope: item.lim || null,
+      buscar: normalizarBusqueda(item.n)
+    };
   }
 
   /* -------------------------------------------------------------- proteína */
@@ -1042,6 +1269,7 @@
   }
 
   if (tipo === 'proteina') modoProteina();
+  else if (tipo === 'salsas') modoSalsas();
   else if (tipo === 'receta') modoReceta();
   else if (tipo === 'fruver') modoFruver();
   else modoConteo();

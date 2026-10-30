@@ -313,14 +313,57 @@ function isMentioned(ctx: Context, extraPatterns?: string[]): boolean {
   // Reply to one of our messages counts as an implicit mention.
   if (ctx.message?.reply_to_message?.from?.username === botUsername) return true
 
+  // Two guards, both about the poll loop being single-threaded: whatever time
+  // this function burns, every other chat waits.
+  //
+  // 1. Each pattern string is compiled once, not once per inbound message.
+  // 2. Only the first MENTION_SCAN_LIMIT chars are tested. The subject is
+  //    attacker-controlled — any member of an enabled group can send 4096
+  //    chars — and backtracking cost grows with subject length.
+  //
+  // Be clear about what guard 2 does and doesn't buy, because the difference
+  // is large. Measured on node 22, patterns against a run of 'a':
+  //
+  //   a*a*b   (quadratic, the common accident)  4000 chars: 9466 ms
+  //   a*a*b                                     1000 chars:  167 ms
+  //   (a|a)*b (exponential)                       28 chars: 2659 ms
+  //
+  // So the cap turns the quadratic accident from a 9-second stall into a
+  // sixth of a second — worth having. Against an exponential pattern it buys
+  // nothing: 1000 chars would never finish, and no cap short of ~20 chars
+  // would help. There is no synchronous way to time-bound a regex in JS.
+  //
+  // Which means the actual control is upstream: don't put a pattern with
+  // nested quantifiers or ambiguous alternation in mentionPatterns. That is a
+  // config decision, warned about in ACCESS.md. Note that the pattern comes
+  // from the operator, not from Telegram — so this is a foot-gun, not a hole
+  // someone outside can open on their own.
   for (const pat of extraPatterns ?? []) {
-    try {
-      if (new RegExp(pat, 'i').test(text)) return true
-    } catch {
-      // Invalid user-supplied regex — skip it.
-    }
+    const re = mentionRe(pat)
+    if (re && re.test(text.slice(0, MENTION_SCAN_LIMIT))) return true
   }
   return false
+}
+
+const MENTION_SCAN_LIMIT = 1000
+const mentionReCache = new Map<string, RegExp | null>()
+
+/** Compiled pattern, or null if the operator's regex doesn't compile. */
+function mentionRe(pat: string): RegExp | null {
+  let re = mentionReCache.get(pat)
+  if (re === undefined) {
+    try {
+      re = new RegExp(pat, 'i')
+    } catch {
+      re = null // Invalid operator-supplied regex — skip it, don't retry.
+    }
+    // access.json is re-read on every message, so a typo'd pattern that keeps
+    // changing would grow this map. Bounded: mentionPatterns is a short
+    // hand-written list, and clearing just means recompiling once.
+    if (mentionReCache.size > 100) mentionReCache.clear()
+    mentionReCache.set(pat, re)
+  }
+  return re
 }
 
 // The /telegram:access skill drops a file at approved/<senderId> when it pairs

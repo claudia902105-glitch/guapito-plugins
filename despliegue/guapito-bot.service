@@ -1,0 +1,97 @@
+# Unit de systemd para el bot de Telegram de El Guapo.
+#
+# OJO, LO IMPORTANTE PRIMERO: esto NO corre `bun server.ts`. No se puede.
+# server.ts es un servidor MCP que habla por stdin/stdout con una sesión de
+# Claude Code, y se autoapaga en cuanto stdin se cierra (ver el watchdog al
+# final de server.ts). Bajo systemd, stdin es /dev/null: el proceso arrancaría
+# y se mataría solo en el primer tick. Lo que hay que mantener vivo es LA
+# SESIÓN DE CLAUDE CODE; ella levanta el servidor MCP como proceso hijo.
+#
+# Y de ahí el segundo problema: `claude --channels` necesita una terminal de
+# verdad. Lanzado sin TTY se cae a los 15-20 segundos con
+# "Input must be provided either through stdin or as a prompt argument".
+# Está reportado (anthropics/claude-code#40726, duplicado de #36001) y ninguno
+# de los dos tiene fix publicado. Por eso acá el comando va envuelto en
+# `script`, que le da un pseudo-TTY y, a diferencia de tmux, deja el proceso
+# dentro del cgroup de systemd: así `Restart=always` y `systemctl stop`
+# funcionan de verdad.
+#
+# Si aun con esto se cae a los ~20 s, pasar al plan B que está documentado al
+# final de DESPLIEGUE.md (tmux). No es una derrota: tmux es la variante con más
+# evidencia de campo, solo que systemd la supervisa peor.
+#
+# Instalación: ver DESPLIEGUE.md. Hay cuatro cosas que HAY QUE EDITAR acá
+# abajo, están marcadas con EDITAR.
+
+[Unit]
+Description=Bot de Telegram de El Guapo (sesión de Claude Code con el canal)
+Documentation=https://github.com/claudia902105-glitch/guapito-plugins/blob/main/despliegue/DESPLIEGUE.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# EDITAR 1: el usuario que hoy corre el bot a mano. NO root: el token y el
+# access.json viven en ~/.claude/channels/telegram del usuario que arranca la
+# sesión, y si cambia el usuario cambia la ruta y el bot pierde la allowlist.
+User=guapito
+Group=guapito
+
+# EDITAR 2: el directorio desde donde arranca la sesión (el repo del plugin).
+WorkingDirectory=/home/guapito/guapito-plugins
+
+# `claude` casi siempre se instala en ~/.local/bin o ~/.bun/bin, que no están
+# en el PATH mínimo de systemd. `which claude` en el servidor dice cuál es.
+Environment=PATH=/home/guapito/.local/bin:/home/guapito/.bun/bin:/usr/local/bin:/usr/bin:/bin
+Environment=HOME=/home/guapito
+Environment=TERM=xterm-256color
+
+# Mide cada tramo de la latencia y lo escribe en el journal. Sin esto el
+# diagnóstico de septiembre no se puede cerrar: es lo que lee
+# analizar-timing.ts. No registra el texto de los mensajes, solo ids, largos
+# en caracteres y milisegundos.
+#
+# OJO: la instrumentación que lee esta variable está en el PR #1, todavía sin
+# mergear. Hasta que entre, esta línea no hace nada (server.ts ignora la
+# variable, no falla). No molesta tenerla puesta desde ahora.
+Environment=TELEGRAM_TIMING=1
+
+# EDITAR 3: el comando exacto con el que hoy arranca la sesión. El nombre del
+# plugin depende de cómo esté instalado (marketplace oficial o local); el de
+# abajo es el del marketplace. `claude --help` y la lista de /plugin en una
+# sesión viva dicen cuál corresponde. Si el comando está mal, el bot arranca
+# sin canal: responde a nada y no hay error visible.
+ExecStart=/usr/bin/script -qfc "claude --channels plugin:telegram@claude-plugins-official" /dev/null
+
+Restart=always
+RestartSec=10
+
+# Reinicio diario (comentado a propósito: decidilo vos).
+#
+# A favor: una sesión que lleva días abierta acumula contexto, y más contexto
+# es más tiempo por turno. Es la hipótesis que quedó sin probar en septiembre
+# sobre la lentitud que reportó Alicia, y esta línea la prueba gratis.
+# En contra: el reinicio corta la sesión en seco. Si Alicia está a mitad de una
+# conversación a esa hora, se pierde el hilo (no el dato ya escrito en
+# Airtable, sí el contexto de la charla). 4 de la mañana es la hora con menos
+# riesgo, pero el riesgo no es cero.
+#RuntimeMaxSec=86400
+
+# Que un bot de cocina no pueda escribir fuera de lo suyo.
+# OJO: Claude Code necesita escribir en ~/.claude y en el repo. Si se activa
+# esto y algo deja de funcionar, el journal lo dice como EACCES o "read-only
+# file system". Arrancar sin estas líneas, confirmar que el bot anda, y
+# recién después activarlas de a una.
+#NoNewPrivileges=yes
+#PrivateTmp=yes
+#ProtectSystem=full
+#ProtectHome=read-only
+#ReadWritePaths=/home/guapito/.claude /home/guapito/guapito-plugins
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guapito-bot
+
+[Install]
+WantedBy=multi-user.target

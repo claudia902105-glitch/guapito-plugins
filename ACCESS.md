@@ -73,6 +73,15 @@ In groups with `requireMention: true`, any of the following triggers the bot:
 /telegram:access set mentionPatterns '["^hey claude\\b", "\\bassistant\\b"]'
 ```
 
+> **Keep these patterns simple.** They run against every message in an enabled
+> group, on the single-threaded poll loop, so whatever time a match takes is
+> time every other chat waits. Avoid nested quantifiers (`(a+)+`) and ambiguous
+> alternation (`(a|a)*`): against a long message those backtrack
+> catastrophically and can stall the bot for seconds or hang it outright. The
+> server tests only the first 1000 characters, which keeps the common quadratic
+> accident (`a*a*b`) under 200 ms, but nothing bounds a truly exponential
+> pattern. Anchored literals and `\b` word boundaries are safe.
+
 ## Delivery
 
 Configure outbound behavior with `/telegram:access set <key> <value>`.

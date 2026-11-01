@@ -345,6 +345,23 @@
     return (n < 0 ? '-' : '') + s;
   }
 
+  // Escapa texto que viene de afuera antes de meterlo en innerHTML. Los nombres
+  // de producto y subproducto llegan en el payload `?d=` que arma el bot desde
+  // Airtable: son datos, no HTML. Si alguien escribiera "<img onerror=...>" en
+  // uno de esos campos, el navegador lo ejecutaría dentro del Mini App y podría
+  // llamar a sendData() en nombre de quien abrió el formulario, es decir cargar
+  // una producción falsa firmada por esa persona. Con esto el nombre se muestra
+  // como texto y nada más (30-oct-2026).
+  function esc(s) {
+    if (s === null || s === undefined) return '';
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   // Separador de miles mientras se escribe (26-ago-2026, pedido de Claudia).
   // El problema real: el personal escribe 1000 y no distingue a simple vista
   // 1000 de 10000, así que un cero de más entra sin que nadie lo note. Con el
@@ -1671,7 +1688,7 @@
       if (sub && num(sub) > 0) {
         var vSub = num(sub);
         var vv = veredictoLimite(datos.sp.lim, vSub, num(recetas), 'g');
-        lineas.push(datos.sp.n + ': ' + (vv ? vv.txt : '<b>' + miles(vSub) + ' g</b>'));
+        lineas.push(esc(datos.sp.n) + ': ' + (vv ? vv.txt : '<b>' + miles(vSub) + ' g</b>'));
       }
       resumen.innerHTML = lineas.join(' · ') || 'Cargá los pesos para ver las mermas.';
 
@@ -1761,12 +1778,14 @@
 
       var lineas = [];
       if (r > 0 && q > 0) {
-        lineas.push('Rendimiento: <b>' + redondear(q / r) + ' ' + uCorta + ' por receta</b>');
+        lineas.push('Rendimiento: <b>' + redondear(q / r) + ' ' + esc(uCorta) + ' por receta</b>');
       }
       var base = textoLimite(datos.lim, uCorta);
       if (base) {
         var v = veredictoLimite(datos.lim, q, r, uCorta);
-        lineas.push(v ? v.txt : base);
+        // textoLimite y veredictoLimite devuelven texto plano, pero le pegan
+        // adentro la unidad, que viene del payload. Se escapa la línea entera.
+        lineas.push(esc(v ? v.txt : base));
       }
       resumen.innerHTML = lineas.join('<br>') ||
         'Cargá las recetas y la cantidad para ver el rendimiento.';

@@ -394,8 +394,16 @@
   // `etiqueta` es opcional (default 'por receta'): la Distribución entre
   // recetas de proteínas (1-sep-2026) reusa esta misma función pero compara
   // gramos ÷ porciones, así que el texto dice 'por porción'.
+  // 5-nov-2026, pedido de Alicia: quien registra NO ve el esperado, el rango,
+  // el veredicto (✅/⚠️ por debajo/encima) ni el rendimiento en vivo. Así no
+  // sabe si quedó por encima o por debajo y no "ajusta" el número. La alerta
+  // queda solo en Airtable, contra lo registrado (Fuera de estándar /
+  // Alerta rendimiento). Para volver a mostrarlos, poner estas dos en true.
+  var MOSTRAR_LIMITES = false;
+  var MOSTRAR_RENDIMIENTO = false;
+
   function textoLimite(lim, unidad, etiqueta) {
-    if (!lim || !(lim.est > 0)) return '';
+    if (!MOSTRAR_LIMITES || !lim || !(lim.est > 0)) return '';
     var u = unidad ? ' ' + unidad : '';
     var rango = (lim.min > 0 && lim.max > 0)
       ? ' · rango ' + miles(lim.min) + '–' + miles(lim.max) + u
@@ -406,7 +414,7 @@
   // Devuelve null cuando todavía no hay con qué comparar. Nunca bloquea el
   // envío: avisa. Una tanda fuera de rango es un dato, no un error de carga.
   function veredictoLimite(lim, q, r, unidad, etiqueta) {
-    if (!lim || !(lim.min > 0) || !(lim.max > 0) || !(q > 0) || !(r > 0)) return null;
+    if (!MOSTRAR_LIMITES || !lim || !(lim.min > 0) || !(lim.max > 0) || !(q > 0) || !(r > 0)) return null;
     var porUnidad = q / r;
     var u = unidad ? ' ' + unidad : '';
     var et = etiqueta || 'por receta';
@@ -557,7 +565,7 @@
         var r = num(f.rec);
         if (produjo && !(r > 0)) faltan++;
 
-        f.rend.textContent = (produjo && r > 0)
+        f.rend.textContent = (MOSTRAR_RENDIMIENTO && produjo && r > 0)
           ? '→ ' + redondear(q / r) + (unidad ? ' ' + unidad : '') + ' por receta'
           : '';
 
@@ -656,7 +664,7 @@
 
     // Límite de producción del ítem, si Airtable tiene tolerancia cargada.
     var lim = null;
-    if (item.lim && item.lim.est > 0) {
+    if (MOSTRAR_LIMITES && item.lim && item.lim.est > 0) {
       lim = document.createElement('div');
       lim.className = 'lim';
       lim.textContent = textoLimite(item.lim, unidad);
@@ -823,7 +831,7 @@
         f.row.classList.toggle('pendiente', produjo && !(r > 0));
         if (produjo && !(r > 0) && !primeraSinReceta) primeraSinReceta = f.n;
 
-        f.rend.textContent = (produjo && r > 0)
+        f.rend.textContent = (MOSTRAR_RENDIMIENTO && produjo && r > 0)
           ? '→ ' + redondear(q / r) + (uCorta ? ' ' + uCorta : '') + ' por receta'
           : '';
 
@@ -870,7 +878,7 @@
     info.appendChild(rend);
 
     var lim = null;
-    if (item.lim && item.lim.est > 0) {
+    if (MOSTRAR_LIMITES && item.lim && item.lim.est > 0) {
       lim = document.createElement('div');
       lim.className = 'lim';
       lim.textContent = textoLimite(item.lim, uCorta);
@@ -1555,7 +1563,7 @@
         // contra su propio Mínimo/Máximo (proteína), no contra el total
         // repartido. Igual que en los demás menús, sin `lim` no se dibuja nada.
         var lim = null;
-        if (r.lim && r.lim.est > 0) {
+        if (MOSTRAR_LIMITES && r.lim && r.lim.est > 0) {
           lim = document.createElement('div');
           lim.className = 'lim';
           lim.textContent = textoLimite(r.lim, 'g', 'por porción');
@@ -1760,7 +1768,7 @@
       if (!(q > 0)) problemas.push('Falta la cantidad producida');
 
       var lineas = [];
-      if (r > 0 && q > 0) {
+      if (MOSTRAR_RENDIMIENTO && r > 0 && q > 0) {
         lineas.push('Rendimiento: <b>' + redondear(q / r) + ' ' + uCorta + ' por receta</b>');
       }
       var base = textoLimite(datos.lim, uCorta);
@@ -1769,7 +1777,7 @@
         lineas.push(v ? v.txt : base);
       }
       resumen.innerHTML = lineas.join('<br>') ||
-        'Cargá las recetas y la cantidad para ver el rendimiento.';
+        (r > 0 && q > 0 ? 'Listo para registrar.' : 'Cargá las recetas y la cantidad producida.');
 
       if (problemas.length) {
         tg.MainButton.hide();
